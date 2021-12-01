@@ -32,7 +32,7 @@ type Reconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=virtualkubelet.liqo.io,resources=shadowpods,verbs=get;list;watch;update;patch;delete
+// +kubebuilder:rbac:groups=apps.liqo.io,resources=liqodeployments,verbs=get;list;watch;update;patch;delete
 
 // Reconcile checks the LiqoDeployment Spec and creates necessary deployment replicas, updating the LiqoDeployment status.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
