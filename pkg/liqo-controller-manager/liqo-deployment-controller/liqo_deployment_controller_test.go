@@ -15,10 +15,14 @@
 package liqodeploymentctrl_test
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/klog/v2"
 	"k8s.io/kubectl/pkg/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 
@@ -26,16 +30,29 @@ import (
 )
 
 var _ = Describe("Reconcile", func() {
-	var (
-		ctx context.Context
-		res ctrl.Result
-		err error
+	const (
+		liqoDeploymentNamespace string = "default"
+		liqoDeploymentName      string = "test-liqo-deployment"
+	)
 
-		req = ctrl.Request{}
+	var (
+		ctx    context.Context
+		buffer *bytes.Buffer
+		res    ctrl.Result
+		err    error
+
+		req = ctrl.Request{
+			NamespacedName: types.NamespacedName{
+				Namespace: liqoDeploymentNamespace,
+				Name:      liqoDeploymentName,
+			},
+		}
 	)
 
 	BeforeEach(func() {
 		ctx = context.TODO()
+		buffer = &bytes.Buffer{}
+		klog.SetOutput(buffer)
 	})
 
 	JustBeforeEach(func() {
@@ -45,10 +62,14 @@ var _ = Describe("Reconcile", func() {
 		}
 
 		res, err = r.Reconcile(ctx, req)
+		klog.Flush()
 	})
 
-	It("should not error", func() {
-		Expect(res).To(BeNil())
-		Expect(err).NotTo(HaveOccurred())
+	When("liqodeployment is not found", func() {
+		It("should ignore it", func() {
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res).To(BeZero())
+			Expect(buffer.String()).To(ContainSubstring(fmt.Sprintf("skip: liqodeployment %v not found", req.NamespacedName)))
+		})
 	})
 })

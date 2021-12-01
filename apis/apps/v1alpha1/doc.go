@@ -13,6 +13,6 @@
 // limitations under the License.
 
 // Package v1alpha1 contains API Schema definitions for the apps v1alpha1 API group.
-// +groupName=virtualkubelet.liqo.io
+// +groupName=apps.liqo.io
 // +kubebuilder:object:generate=true
 package v1alpha1

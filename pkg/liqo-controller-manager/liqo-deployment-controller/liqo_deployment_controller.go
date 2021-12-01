@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -31,8 +32,22 @@ type Reconciler struct {
 	Scheme *runtime.Scheme
 }
 
+// +kubebuilder:rbac:groups=virtualkubelet.liqo.io,resources=shadowpods,verbs=get;list;watch;update;patch;delete
+
 // Reconcile checks the LiqoDeployment Spec and creates necessary deployment replicas, updating the LiqoDeployment status.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	nsName := req.NamespacedName
+	klog.V(4).Infof("reconcile liqodeployment %s", nsName)
+
+	liqoDeployment := appsv1alpha1.LiqoDeployment{}
+	if err := r.Get(ctx, nsName, &liqoDeployment); err != nil {
+		err = client.IgnoreNotFound(err)
+		if err == nil {
+			klog.V(4).Infof("skip: liqodeployment %s not found", nsName)
+		}
+		return ctrl.Result{}, err
+	}
+
 	return ctrl.Result{}, nil
 }
 

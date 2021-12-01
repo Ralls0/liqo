@@ -24,7 +24,7 @@ var (
 	SchemeGroupVersion = schema.GroupVersion{Group: "apps.liqo.io", Version: "v1alpha1"}
 
 	// LiqoDeploymentResource is the resource name used to register the LiqoDeployment CRD.
-	LiqoDeploymentResource = "liqodeployment"
+	LiqoDeploymentResource = "liqodeployments"
 
 	// LiqoDeploymentGroupResource is group resource used to register these objects.
 	LiqoDeploymentGroupResource = schema.GroupResource{Group: SchemeGroupVersion.Group, Resource: LiqoDeploymentResource}

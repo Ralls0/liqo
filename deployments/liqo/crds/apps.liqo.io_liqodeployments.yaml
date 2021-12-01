@@ -6,9 +6,9 @@ metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.6.2
   creationTimestamp: null
-  name: liqodeployments.virtualkubelet.liqo.io
+  name: liqodeployments.apps.liqo.io
 spec:
-  group: virtualkubelet.liqo.io
+  group: apps.liqo.io
   names:
     kind: LiqoDeployment
     listKind: LiqoDeploymentList

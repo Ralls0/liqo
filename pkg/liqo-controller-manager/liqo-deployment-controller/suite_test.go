@@ -33,7 +33,7 @@ import (
 var testEnv *envtest.Environment
 var k8sClient client.Client
 
-func TestShadowPodController(t *testing.T) {
+func TestLiqoDeploymentController(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Liqo Deployment Controller Suite")
 }
