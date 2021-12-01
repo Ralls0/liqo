@@ -159,7 +159,6 @@ rules:
   resources:
   - liqodeployments
   verbs:
-  - create
   - delete
   - get
   - list
