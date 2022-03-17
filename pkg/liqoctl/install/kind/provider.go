@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -57,12 +57,16 @@ func (k *Kind) UpdateChartValues(values map[string]interface{}) {
 			"reservedSubnets": installutils.GetInterfaceSlice(k.ReservedSubnets),
 		},
 	}
+	if k.LanDiscovery == nil {
+		lanDiscovery := true
+		k.LanDiscovery = &lanDiscovery
+	}
 	values["discovery"] = map[string]interface{}{
 		"config": map[string]interface{}{
 			"clusterLabels":       installutils.GetInterfaceMap(k.ClusterLabels),
 			"clusterName":         k.ClusterName,
-			"enableAdvertisement": true,
-			"enableDiscovery":     true,
+			"enableAdvertisement": *k.LanDiscovery,
+			"enableDiscovery":     *k.LanDiscovery,
 		},
 	}
 }

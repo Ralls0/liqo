@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,7 +24,6 @@ import (
 	discoveryv1beta1apply "k8s.io/client-go/applyconfigurations/discovery/v1beta1"
 	"k8s.io/utils/pointer"
 
-	"github.com/liqotech/liqo/pkg/virtualKubelet"
 	"github.com/liqotech/liqo/pkg/virtualKubelet/forge"
 )
 
@@ -36,11 +35,7 @@ var _ = Describe("EndpointSlices Forging", func() {
 		return outputs
 	}
 
-	BeforeEach(func() {
-		forge.LiqoNodeName = func() string { return "liqo-node" }
-		forge.LocalClusterID = LocalClusterID
-		forge.RemoteClusterID = RemoteClusterID
-	})
+	BeforeEach(func() { forge.Init(LocalClusterID, RemoteClusterID, LiqoNodeName, LiqoNodeIP) })
 
 	Describe("the RemoteEndpointSlice function", func() {
 		var (
@@ -129,7 +124,7 @@ var _ = Describe("EndpointSlices Forging", func() {
 				Expect(output[0].Conditions.Terminating).To(BeNil())
 			})
 			It("should correctly translate and replicate the topology information", func() {
-				Expect(output[0].Topology).To(HaveKeyWithValue(corev1.LabelHostname, virtualKubelet.VirtualNodeName(LocalClusterID)))
+				Expect(output[0].Topology).To(HaveKeyWithValue(corev1.LabelHostname, LocalClusterID))
 				Expect(output[0].Topology).To(HaveKeyWithValue(corev1.LabelTopologyRegion, "region"))
 			})
 			It("should correctly replicate the secondary fields", func() {
@@ -143,7 +138,7 @@ var _ = Describe("EndpointSlices Forging", func() {
 
 		When("translating an endpoint referring to the remote cluster (topology)", func() {
 			BeforeEach(func() {
-				endpoint.Topology[corev1.LabelHostname] = forge.LiqoNodeName()
+				endpoint.Topology[corev1.LabelHostname] = forge.LiqoNodeName
 				input = []discoveryv1beta1.Endpoint{endpoint, endpoint, endpoint}
 			})
 			It("should return no endpoints", func() { Expect(output).To(HaveLen(0)) })
@@ -151,7 +146,7 @@ var _ = Describe("EndpointSlices Forging", func() {
 
 		When("translating an endpoint referring to the remote cluster (nodename)", func() {
 			BeforeEach(func() {
-				endpoint.NodeName = pointer.String(forge.LiqoNodeName())
+				endpoint.NodeName = pointer.String(forge.LiqoNodeName)
 				input = []discoveryv1beta1.Endpoint{endpoint, endpoint, endpoint}
 			})
 			It("should return no endpoints", func() { Expect(output).To(HaveLen(0)) })

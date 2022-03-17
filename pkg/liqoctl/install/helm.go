@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,7 +25,7 @@ import (
 )
 
 // InitializeHelmClientWithRepo initiliazes an helm client for a given *rest.Config and adds the Liqo repository.
-func InitializeHelmClientWithRepo(config *rest.Config, commonArgs *provider.CommonArguments) (*helm.HelmClient, error) {
+func InitializeHelmClientWithRepo(config *rest.Config, commonArgs *provider.CommonArguments) (helm.Client, error) {
 	opt := &helm.RestConfClientOptions{
 		Options: &helm.Options{
 			Namespace:        installutils.LiqoNamespace,
@@ -47,7 +47,7 @@ func InitializeHelmClientWithRepo(config *rest.Config, commonArgs *provider.Comm
 		return nil, err
 	}
 
-	return client.(*helm.HelmClient), nil
+	return client, nil
 }
 
 func initLiqoRepo(helmClient helm.Client) error {

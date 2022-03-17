@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,6 +19,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// StorageType defines the type of storage offered by a resource offer.
+type StorageType struct {
+	// StorageClassName indicates the name of the storage class.
+	StorageClassName string `json:"storageClassName"`
+	// Default indicates whether this storage class is the default storage class for Liqo.
+	Default bool `json:"default,omitempty"`
+}
+
 // ResourceOfferSpec defines the desired state of ResourceOffer.
 type ResourceOfferSpec struct {
 	// ClusterId is the identifier of the cluster that is sending this ResourceOffer.
@@ -34,6 +42,8 @@ type ResourceOfferSpec struct {
 	Prices corev1.ResourceList `json:"prices,omitempty"`
 	// WithdrawalTimestamp is set when a graceful deletion is requested by the user.
 	WithdrawalTimestamp *metav1.Time `json:"withdrawalTimestamp,omitempty"`
+	// StorageClasses contains the list of the storage classes offered by the cluster.
+	StorageClasses []StorageType `json:"storageClasses,omitempty"`
 }
 
 // OfferPhase describes the phase of the ResourceOffer.

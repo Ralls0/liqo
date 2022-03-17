@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -51,7 +51,7 @@ func (f *genericInformer) Lister() cache.GenericLister {
 // TODO extend this to unknown resources with a client pool
 func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource) (GenericInformer, error) {
 	switch resource {
-	// Group=virtualkubelet, Version=v1alpha1
+	// Group=virtualkubelet.liqo.io, Version=v1alpha1
 	case v1alpha1.SchemeGroupVersion.WithResource("namespacemaps"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Virtualkubelet().V1alpha1().NamespaceMaps().Informer()}, nil
 	case v1alpha1.SchemeGroupVersion.WithResource("shadowpods"):

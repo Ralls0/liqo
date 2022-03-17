@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,19 +15,24 @@
 package main
 
 import (
+	"crypto/tls"
 	"flag"
+	"fmt"
+	"net/http"
 	"os"
-	"sync"
 	"time"
 
-	capsulev1beta1 "github.com/clastix/capsule/api/v1beta1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/selection"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/sig-storage-lib-external-provisioner/v7/controller"
 
@@ -40,8 +45,8 @@ import (
 	identitymanager "github.com/liqotech/liqo/pkg/identityManager"
 	foreignclusteroperator "github.com/liqotech/liqo/pkg/liqo-controller-manager/foreign-cluster-operator"
 	namectrl "github.com/liqotech/liqo/pkg/liqo-controller-manager/namespace-controller"
-	mapsctrl "github.com/liqotech/liqo/pkg/liqo-controller-manager/namespaceMap-controller"
 	nsoffctrl "github.com/liqotech/liqo/pkg/liqo-controller-manager/namespaceOffloading-controller"
+	mapsctrl "github.com/liqotech/liqo/pkg/liqo-controller-manager/namespacemap-controller"
 	offloadingctrl "github.com/liqotech/liqo/pkg/liqo-controller-manager/offloadingStatus-controller"
 	resourceRequestOperator "github.com/liqotech/liqo/pkg/liqo-controller-manager/resource-request-controller"
 	resourceoffercontroller "github.com/liqotech/liqo/pkg/liqo-controller-manager/resourceoffer-controller"
@@ -49,11 +54,11 @@ import (
 	shadowpodctrl "github.com/liqotech/liqo/pkg/liqo-controller-manager/shadowpod-controller"
 	liqostorageprovisioner "github.com/liqotech/liqo/pkg/liqo-controller-manager/storageprovisioner"
 	virtualNodectrl "github.com/liqotech/liqo/pkg/liqo-controller-manager/virtualNode-controller"
-	"github.com/liqotech/liqo/pkg/mapperUtils"
 	peeringroles "github.com/liqotech/liqo/pkg/peering-roles"
 	tenantnamespace "github.com/liqotech/liqo/pkg/tenantNamespace"
 	argsutils "github.com/liqotech/liqo/pkg/utils/args"
 	liqoerrors "github.com/liqotech/liqo/pkg/utils/errors"
+	"github.com/liqotech/liqo/pkg/utils/mapper"
 	"github.com/liqotech/liqo/pkg/utils/restcfg"
 	"github.com/liqotech/liqo/pkg/vkMachinery"
 	"github.com/liqotech/liqo/pkg/vkMachinery/csr"
@@ -68,6 +73,8 @@ const (
 
 var (
 	scheme = runtime.NewScheme()
+
+	healthFlag = false
 )
 
 func init() {
@@ -79,8 +86,14 @@ func init() {
 	_ = offloadingv1alpha1.AddToScheme(scheme)
 	_ = virtualkubeletv1alpha1.AddToScheme(scheme)
 
-	_ = capsulev1beta1.AddToScheme(scheme)
 	// +kubebuilder:scaffold:scheme
+}
+
+func probe(req *http.Request) error {
+	if healthFlag {
+		return nil
+	}
+	return fmt.Errorf("controller manager not yet configured")
 }
 
 func main() {
@@ -96,25 +109,21 @@ func main() {
 
 	// Global parameters
 	resyncPeriod := flag.Duration("resync-period", 10*time.Hour, "The resync period for the informers")
-	clusterID := flag.String("cluster-id", "", "The cluster ID identifying the current cluster")
+	clusterIdentityFlags := argsutils.NewClusterIdentityFlags(true, nil)
 	liqoNamespace := flag.String("liqo-namespace", defaultNamespace,
 		"Name of the namespace where the liqo components are running")
 	foreignClusterWorkers := flag.Uint("foreign-cluster-workers", 1, "The number of workers used to reconcile ForeignCluster resources.")
 	shadowPodWorkers := flag.Int("shadow-pod-ctrl-workers", 10, "The number of workers used to reconcile ShadowPod resources.")
 
 	// Discovery parameters
-	clusterName := flag.String(consts.ClusterNameParameter, "", "A mnemonic name associated with the current cluster")
 	authServiceAddressOverride := flag.String(consts.AuthServiceAddressOverrideParameter, "",
 		"The address the authentication service is reachable from foreign clusters (automatically retrieved if not set")
 	authServicePortOverride := flag.String(consts.AuthServicePortOverrideParameter, "",
 		"The port the authentication service is reachable from foreign clusters (automatically retrieved if not set")
 	autoJoin := flag.Bool("auto-join-discovered-clusters", true, "Whether to automatically peer with discovered clusters")
-	ownerReferencesPermissionEnforcement := flag.Bool("owner-references-permission-enforcement", false,
-		"Enable support for the OwnerReferencesPermissionEnforcement admission controller "+
-			"https://kubernetes.io/docs/reference/access-authn-authz/admission-controllers/#ownerreferencespermissionenforcement")
 
 	// Resource sharing parameters
-	flag.Var(&clusterLabels, "cluster-labels",
+	flag.Var(&clusterLabels, consts.ClusterLabelsParameter,
 		"The set of labels which characterizes the local cluster when exposed remotely as a virtual node")
 	resourceSharingPercentage := argsutils.Percentage{Val: 50}
 	flag.Var(&resourceSharingPercentage, "resource-sharing-percentage",
@@ -129,8 +138,6 @@ func main() {
 	// Namespace management parameters
 	offloadingStatusControllerRequeueTime := flag.Duration("offloading-status-requeue-period", 10*time.Second,
 		"Period after that the offloading status controller is awaken on every NamespaceOffloading to set its status")
-	namespaceMapControllerRequeueTime := flag.Duration("namespace-map-requeue-period", 30*time.Second,
-		"Period after that the namespace map controller is awaken on every NamespaceMap to enforce DesiredMappings")
 
 	// Virtual-kubelet parameters
 	kubeletImage := flag.String("kubelet-image", defaultVKImage, "The image of the virtual kubelet to be deployed")
@@ -159,25 +166,39 @@ func main() {
 	klog.InitFlags(nil)
 	flag.Parse()
 
-	if *clusterID == "" {
-		klog.Error("Cluster ID must be provided")
-		os.Exit(1)
-	}
+	clusterIdentity := clusterIdentityFlags.ReadOrDie()
 
 	ctx := ctrl.SetupSignalHandler()
 
 	config := restcfg.SetRateLimiter(ctrl.GetConfigOrDie())
 
+	// Create a label selector to filter out the events for pods not managed by a ShadowPod,
+	// as those are the only ones we are interested in to implement the resiliency mechanism.
+	podsLabelRequirement, err := labels.NewRequirement(consts.ManagedByLabelKey, selection.Equals, []string{consts.ManagedByShadowPodValue})
+	utilruntime.Must(err)
+
 	mgr, err := ctrl.NewManager(config, ctrl.Options{
-		MapperProvider:         mapperUtils.LiqoMapperProvider(scheme),
+		MapperProvider:         mapper.LiqoMapperProvider(scheme),
 		Scheme:                 scheme,
 		MetricsBindAddress:     *metricsAddr,
 		HealthProbeBindAddress: *probeAddr,
 		LeaderElection:         false,
 		LeaderElectionID:       "66cf253f.liqo.io",
 		Port:                   9443,
+		NewCache: cache.BuilderWithOptions(cache.Options{
+			SelectorsByObject: cache.SelectorsByObject{
+				&corev1.Pod{}: {
+					Label: labels.NewSelector().Add(*podsLabelRequirement),
+				},
+			},
+		}),
 	})
 	if err != nil {
+		klog.Error(err)
+		os.Exit(1)
+	}
+
+	if err = mgr.AddReadyzCheck("/readyz", probe); err != nil {
 		klog.Error(err)
 		os.Exit(1)
 	}
@@ -188,7 +209,7 @@ func main() {
 	}
 
 	namespaceManager := tenantnamespace.NewTenantNamespaceManager(clientset)
-	idManager := identitymanager.NewCertificateIdentityManager(clientset, *clusterID, namespaceManager)
+	idManager := identitymanager.NewCertificateIdentityManager(clientset, clusterIdentity, namespaceManager)
 
 	// populate the lists of ClusterRoles to bind in the different peering states
 	permissions, err := peeringroles.GetPeeringPermission(ctx, clientset)
@@ -196,13 +217,19 @@ func main() {
 		klog.Fatalf("Unable to populate peering permission: %w", err)
 	}
 
-	// Setup operators
+	// Configure the tranports used for the intaction with the remote authentication service.
+	// Using the same transport allows to reuse the underlying TCP/TLS connections when contacting the same destinations,
+	// and reduce the overall handshake overhead, especially with high-latency links.
+	secureTransport := &http.Transport{IdleConnTimeout: 1 * time.Minute}
+	insecureTransport := &http.Transport{IdleConnTimeout: 1 * time.Minute, TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
 
+	// Setup operators
 	searchDomainReconciler := &searchdomainoperator.SearchDomainReconciler{
-		Client:         mgr.GetClient(),
-		Scheme:         mgr.GetScheme(),
-		ResyncPeriod:   *resyncPeriod,
-		LocalClusterID: *clusterID,
+		Client:            mgr.GetClient(),
+		Scheme:            mgr.GetScheme(),
+		ResyncPeriod:      *resyncPeriod,
+		LocalCluster:      clusterIdentity,
+		InsecureTransport: insecureTransport,
 	}
 	if err = searchDomainReconciler.SetupWithManager(mgr); err != nil {
 		klog.Fatal(err)
@@ -213,36 +240,33 @@ func main() {
 		Scheme:        mgr.GetScheme(),
 		LiqoNamespace: *liqoNamespace,
 
-		ResyncPeriod:                         *resyncPeriod,
-		ClusterID:                            *clusterID,
-		ClusterName:                          *clusterName,
-		AuthServiceAddressOverride:           *authServiceAddressOverride,
-		AuthServicePortOverride:              *authServicePortOverride,
-		AutoJoin:                             *autoJoin,
-		OwnerReferencesPermissionEnforcement: *ownerReferencesPermissionEnforcement,
+		ResyncPeriod:               *resyncPeriod,
+		HomeCluster:                clusterIdentity,
+		AuthServiceAddressOverride: *authServiceAddressOverride,
+		AuthServicePortOverride:    *authServicePortOverride,
+		AutoJoin:                   *autoJoin,
 
 		NamespaceManager:  namespaceManager,
 		IdentityManager:   idManager,
 		PeeringPermission: *permissions,
+
+		SecureTransport:   secureTransport,
+		InsecureTransport: insecureTransport,
 	}
 	if err = foreignClusterReconciler.SetupWithManager(mgr, *foreignClusterWorkers); err != nil {
 		klog.Fatal(err)
 	}
 
-	broadcaster := &resourceRequestOperator.Broadcaster{}
-	updater := &resourceRequestOperator.OfferUpdater{}
-	updater.Setup(*clusterID, mgr.GetScheme(), broadcaster, mgr.GetClient(), clusterLabels.StringMap)
-	if err := broadcaster.SetupBroadcaster(clientset, updater, *resyncPeriod,
-		resourceSharingPercentage.Val, offerUpdateThreshold.Val); err != nil {
-		klog.Error(err)
-		os.Exit(1)
-	}
-
-	resourceRequestReconciler := &resourceRequestOperator.ResourceRequestReconciler{
+	var resourceRequestReconciler *resourceRequestOperator.ResourceRequestReconciler
+	monitor := resourceRequestOperator.NewLocalMonitor(ctx, clientset, *resyncPeriod)
+	scaledMonitor := &resourceRequestOperator.ResourceScaler{Provider: monitor, Factor: float32(resourceSharingPercentage.Val) / 100.}
+	offerUpdater := resourceRequestOperator.NewOfferUpdater(mgr.GetClient(), clusterIdentity, clusterLabels.StringMap,
+		scaledMonitor, uint(offerUpdateThreshold.Val), *realStorageClassName, *enableStorage)
+	resourceRequestReconciler = &resourceRequestOperator.ResourceRequestReconciler{
 		Client:                mgr.GetClient(),
 		Scheme:                mgr.GetScheme(),
-		ClusterID:             *clusterID,
-		Broadcaster:           broadcaster,
+		HomeCluster:           clusterIdentity,
+		OfferUpdater:          offerUpdater,
 		EnableIncomingPeering: *enableIncomingPeering,
 	}
 
@@ -266,7 +290,7 @@ func main() {
 	}
 
 	resourceOfferReconciler := resourceoffercontroller.NewResourceOfferController(
-		mgr, *clusterID, *resyncPeriod, *liqoNamespace, virtualKubeletOpts, *offerDisableAutoAccept)
+		mgr, clusterIdentity, *resyncPeriod, *liqoNamespace, virtualKubeletOpts, *offerDisableAutoAccept)
 	if err = resourceOfferReconciler.SetupWithManager(mgr); err != nil {
 		klog.Fatal(err)
 	}
@@ -290,11 +314,7 @@ func main() {
 	}
 
 	namespaceMapReconciler := &mapsctrl.NamespaceMapReconciler{
-		Client:                mgr.GetClient(),
-		RemoteClients:         make(map[string]kubernetes.Interface),
-		LocalClusterID:        *clusterID,
-		IdentityManagerClient: clientset,
-		RequeueTime:           *namespaceMapControllerRequeueTime,
+		Client: mgr.GetClient(),
 	}
 
 	if err = namespaceMapReconciler.SetupWithManager(mgr); err != nil {
@@ -312,9 +332,9 @@ func main() {
 	}
 
 	namespaceOffloadingReconciler := &nsoffctrl.NamespaceOffloadingReconciler{
-		Client:         mgr.GetClient(),
-		Scheme:         mgr.GetScheme(),
-		LocalClusterID: *clusterID,
+		Client:       mgr.GetClient(),
+		Scheme:       mgr.GetScheme(),
+		LocalCluster: clusterIdentity,
 	}
 
 	if err = namespaceOffloadingReconciler.SetupWithManager(mgr); err != nil {
@@ -344,12 +364,17 @@ func main() {
 	csrWatcher.RegisterHandler(csr.ApproverHandler(clientset, "LiqoApproval", "This CSR was approved by Liqo"))
 	csrWatcher.Start(ctx)
 
-	var wg = &sync.WaitGroup{}
-	broadcaster.StartBroadcaster(ctx, wg)
+	if err = mgr.Add(offerUpdater); err != nil {
+		klog.Fatal(err)
+	}
 
 	if enableStorage != nil && *enableStorage {
-		liqoProvisioner := liqostorageprovisioner.NewLiqoLocalStorageProvisioner(mgr.GetClient(),
+		liqoProvisioner, err := liqostorageprovisioner.NewLiqoLocalStorageProvisioner(ctx, mgr.GetClient(),
 			*virtualStorageClassName, *storageNamespace, *realStorageClassName)
+		if err != nil {
+			klog.Errorf("unable to start the liqo storage provisioner: %v", err)
+			os.Exit(1)
+		}
 
 		provisionController := controller.NewProvisionController(clientset, consts.StorageProvisionerName, liqoProvisioner,
 			controller.LeaderElection(false),
@@ -362,11 +387,11 @@ func main() {
 		}
 	}
 
+	healthFlag = true
+
 	klog.Info("starting manager as controller manager")
 	if err := mgr.Start(ctx); err != nil {
 		klog.Error(err)
 		os.Exit(1)
 	}
-
-	wg.Wait()
 }

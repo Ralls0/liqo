@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,6 +26,7 @@ import (
 	offv1alpha1 "github.com/liqotech/liqo/apis/offloading/v1alpha1"
 	mapsv1alpha1 "github.com/liqotech/liqo/apis/virtualkubelet/v1alpha1"
 	liqoconst "github.com/liqotech/liqo/pkg/consts"
+	foreignclusterutils "github.com/liqotech/liqo/pkg/utils/foreignCluster"
 )
 
 func (r *NamespaceOffloadingReconciler) deletionLogic(ctx context.Context,
@@ -81,7 +82,7 @@ func (r *NamespaceOffloadingReconciler) initialConfiguration(ctx context.Context
 	if noff.Spec.NamespaceMappingStrategy == offv1alpha1.EnforceSameNameMappingStrategyType {
 		noff.Status.RemoteNamespaceName = noff.Namespace
 	} else {
-		noff.Status.RemoteNamespaceName = fmt.Sprintf("%s-%s", noff.Namespace, r.LocalClusterID)
+		noff.Status.RemoteNamespaceName = fmt.Sprintf("%s-%s", noff.Namespace, foreignclusterutils.UniqueName(&r.LocalCluster))
 	}
 	// 4 - Patch the NamespaceOffloading resource.
 	if err := r.Patch(ctx, noff, client.MergeFrom(patch)); err != nil {

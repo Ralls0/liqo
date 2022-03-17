@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -47,4 +47,16 @@ func IsIncomingEnabled(foreignCluster *discoveryv1alpha1.ForeignCluster) bool {
 func IsOutgoingEnabled(foreignCluster *discoveryv1alpha1.ForeignCluster) bool {
 	curPhase := peeringconditionsutils.GetStatus(foreignCluster, discoveryv1alpha1.OutgoingPeeringCondition)
 	return curPhase != discoveryv1alpha1.PeeringConditionStatusNone && curPhase != ""
+}
+
+// IsIncomingPeeringNone checks if the incoming peering is set to none.
+func IsIncomingPeeringNone(foreignCluster *discoveryv1alpha1.ForeignCluster) bool {
+	curPhase := peeringconditionsutils.GetStatus(foreignCluster, discoveryv1alpha1.IncomingPeeringCondition)
+	return curPhase == discoveryv1alpha1.PeeringConditionStatusNone
+}
+
+// IsOutgoingPeeringNone checks if the outgoing peering is set to none.
+func IsOutgoingPeeringNone(foreignCluster *discoveryv1alpha1.ForeignCluster) bool {
+	curPhase := peeringconditionsutils.GetStatus(foreignCluster, discoveryv1alpha1.OutgoingPeeringCondition)
+	return curPhase == discoveryv1alpha1.PeeringConditionStatusNone
 }

@@ -6,6 +6,7 @@ service ipam {
     rpc UnmapEndpointIP (UnmapRequest) returns (UnmapResponse);
     rpc GetHomePodIP (GetHomePodIPRequest) returns (GetHomePodIPResponse);
     rpc GetRemotePodIP (GetRemotePodIPRequest) returns (GetRemotePodIPResponse);
+    rpc BelongsToPodCIDR (BelongsRequest) returns (BelongsResponse);
 }
 
 message MapRequest {
@@ -40,4 +41,12 @@ message GetRemotePodIPRequest {
 
 message GetRemotePodIPResponse {
     string remoteIP = 1;
+}
+
+message BelongsRequest {
+    string ip = 1;
+}
+
+message BelongsResponse {
+    bool belongs = 1;
 }

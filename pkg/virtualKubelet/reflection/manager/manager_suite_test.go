@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,7 +19,8 @@ import (
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
-	"k8s.io/klog/v2"
+
+	"github.com/liqotech/liqo/pkg/utils/testutil"
 )
 
 func TestManager(t *testing.T) {
@@ -28,6 +29,5 @@ func TestManager(t *testing.T) {
 }
 
 var _ = BeforeSuite(func() {
-	klog.SetOutput(GinkgoWriter)
-	klog.LogToStderr(false)
+	testutil.LogsToGinkgoWriter()
 })

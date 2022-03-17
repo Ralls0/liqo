@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -1696,6 +1696,32 @@ var _ = Describe("Ipam", func() {
 			})
 		})
 	})
+
+	Describe("BelongsToPodCIDR", func() {
+		BeforeEach(func() {
+			Expect(ipam.ipamStorage.updatePodCIDR("10.244.0.0/16")).To(Succeed())
+		})
+		Context("Calling it on an IP in the pod CIDR", func() {
+			It("should return true", func() {
+				response, err := ipam.BelongsToPodCIDR(context.Background(), &BelongsRequest{Ip: "10.244.0.1"})
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetBelongs()).To(BeTrue())
+			})
+		})
+		Context("Calling it on an IP not in the pod CIDR", func() {
+			It("should return false", func() {
+				response, err := ipam.BelongsToPodCIDR(context.Background(), &BelongsRequest{Ip: "1.2.3.4"})
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetBelongs()).To(BeFalse())
+			})
+		})
+		Context("Calling it on an invalid IP", func() {
+			It("should return an error", func() {
+				_, err := ipam.BelongsToPodCIDR(context.Background(), &BelongsRequest{Ip: "10.9.9"})
+				Expect(err).To(HaveOccurred())
+			})
+		})
+	})
 })
 
 func checkForPrefixes(subnets []string) {
@@ -1733,7 +1759,7 @@ func getNatMappingResourcePerCluster(clusterID string) (*liqonetapi.NatMapping, 
 
 func getIpamStorageResource() (*liqonetapi.IpamStorage, error) {
 	ipamConfig := &liqonetapi.IpamStorage{}
-	list, err := dynClient.Resource(liqonetapi.IpamGroupResource).List(
+	list, err := dynClient.Resource(liqonetapi.IpamGroupVersionResource).List(
 		context.Background(),
 		v1.ListOptions{
 			LabelSelector: fmt.Sprintf("%s=%s",
@@ -1745,7 +1771,7 @@ func getIpamStorageResource() (*liqonetapi.IpamStorage, error) {
 		return nil, err
 	}
 	if len(list.Items) == 0 {
-		return nil, k8serrors.NewNotFound(liqonetapi.IpamGroupResource.GroupResource(), "")
+		return nil, k8serrors.NewNotFound(liqonetapi.IpamGroupVersionResource.GroupResource(), "")
 	}
 	err = runtime.DefaultUnstructuredConverter.FromUnstructured(list.Items[0].Object, ipamConfig)
 	if err != nil {
@@ -1775,7 +1801,7 @@ func updateIpamStorageResource(ipamStorage *liqonetapi.IpamStorage) error {
 	if err != nil {
 		return err
 	}
-	_, err = dynClient.Resource(liqonetapi.IpamGroupResource).Update(
+	_, err = dynClient.Resource(liqonetapi.IpamGroupVersionResource).Update(
 		context.Background(),
 		&unstructured.Unstructured{Object: unstructuredResource},
 		v1.UpdateOptions{},

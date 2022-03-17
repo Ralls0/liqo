@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -30,7 +30,6 @@ import (
 	discoveryv1alpha1 "github.com/liqotech/liqo/apis/discovery/v1alpha1"
 	netv1alpha1 "github.com/liqotech/liqo/apis/net/v1alpha1"
 	"github.com/liqotech/liqo/pkg/consts"
-	"github.com/liqotech/liqo/pkg/liqonet/tunnel/wireguard"
 	liqoerrors "github.com/liqotech/liqo/pkg/utils/errors"
 	peeringconditionsutils "github.com/liqotech/liqo/pkg/utils/peeringConditions"
 	"github.com/liqotech/liqo/pkg/utils/syncset"
@@ -38,7 +37,8 @@ import (
 
 var _ = Describe("NetworkConfigCreator Controller", func() {
 	const (
-		clusterID      = "fake"
+		clusterID      = "fake-id"
+		clusterName    = "fake-name"
 		namespace      = "liqo"
 		foreigncluster = "foreign-cluster"
 	)
@@ -51,6 +51,14 @@ var _ = Describe("NetworkConfigCreator Controller", func() {
 		ncc *NetworkConfigCreator
 		fc  *discoveryv1alpha1.ForeignCluster
 	)
+
+	AssertNetworkConfigAbsence := func() func() {
+		return func() {
+			var networkConfigList netv1alpha1.NetworkConfigList
+			Expect(ncc.List(ctx, &networkConfigList, client.InNamespace(namespace))).To(Succeed())
+			Expect(networkConfigList.Items).To(HaveLen(0))
+		}
+	}
 
 	BeforeEach(func() {
 		ctx = context.Background()
@@ -84,7 +92,7 @@ var _ = Describe("NetworkConfigCreator Controller", func() {
 		fc = &discoveryv1alpha1.ForeignCluster{
 			ObjectMeta: metav1.ObjectMeta{Name: foreigncluster},
 			Spec: discoveryv1alpha1.ForeignClusterSpec{
-				ClusterIdentity:        discoveryv1alpha1.ClusterIdentity{ClusterID: clusterID},
+				ClusterIdentity:        discoveryv1alpha1.ClusterIdentity{ClusterID: clusterID, ClusterName: clusterName},
 				IncomingPeeringEnabled: discoveryv1alpha1.PeeringEnabledAuto,
 				OutgoingPeeringEnabled: discoveryv1alpha1.PeeringEnabledAuto,
 				InsecureSkipTLSVerify:  pointer.Bool(true),
@@ -117,10 +125,14 @@ var _ = Describe("NetworkConfigCreator Controller", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "foo", Namespace: namespace, Labels: map[string]string{
 						consts.ReplicationDestinationLabel: clusterID,
+						consts.LocalResourceOwnership:      componentName,
 					},
 				},
 				Spec: netv1alpha1.NetworkConfigSpec{
-					ClusterID: "foo", EndpointIP: "bar", BackendType: "baz", BackendConfig: map[string]string{},
+					RemoteCluster: discoveryv1alpha1.ClusterIdentity{ClusterID: "foo-id", ClusterName: "foo-name"},
+					EndpointIP:    "bar",
+					BackendType:   "baz",
+					BackendConfig: map[string]string{},
 				},
 			}
 			Expect(ncc.Create(ctx, &netcfg)).To(Succeed())
@@ -135,6 +147,7 @@ var _ = Describe("NetworkConfigCreator Controller", func() {
 				AssertNetworkConfigMeta := func(netcfg *netv1alpha1.NetworkConfig) {
 					Expect(netcfg.Labels).To(HaveKeyWithValue(consts.ReplicationRequestedLabel, "true"))
 					Expect(netcfg.Labels).To(HaveKeyWithValue(consts.ReplicationDestinationLabel, clusterID))
+					Expect(netcfg.Labels).To(HaveKeyWithValue(consts.LocalResourceOwnership, componentName))
 
 					Expect(metav1.GetControllerOf(netcfg).Kind).To(Equal("ForeignCluster"))
 					Expect(metav1.GetControllerOf(netcfg).APIVersion).To(Equal("discovery.liqo.io/v1alpha1"))
@@ -143,13 +156,14 @@ var _ = Describe("NetworkConfigCreator Controller", func() {
 				}
 
 				AssertNetworkConfigSpec := func(netcfg *netv1alpha1.NetworkConfig) {
-					Expect(netcfg.Spec.ClusterID).To(BeIdenticalTo(clusterID))
+					Expect(netcfg.Spec.RemoteCluster.ClusterID).To(BeIdenticalTo(clusterID))
+					Expect(netcfg.Spec.RemoteCluster.ClusterName).To(BeIdenticalTo(clusterName))
 					Expect(netcfg.Spec.PodCIDR).To(BeIdenticalTo("192.168.0.0/24"))
 					Expect(netcfg.Spec.ExternalCIDR).To(BeIdenticalTo("192.168.1.0/24"))
 					Expect(netcfg.Spec.EndpointIP).To(BeIdenticalTo("1.1.1.1"))
-					Expect(netcfg.Spec.BackendType).To(BeIdenticalTo(wireguard.DriverName))
-					Expect(netcfg.Spec.BackendConfig).To(HaveKeyWithValue(wireguard.PublicKey, "public-key"))
-					Expect(netcfg.Spec.BackendConfig).To(HaveKeyWithValue(wireguard.ListeningPort, "9999"))
+					Expect(netcfg.Spec.BackendType).To(BeIdenticalTo(consts.DriverName))
+					Expect(netcfg.Spec.BackendConfig).To(HaveKeyWithValue(consts.PublicKey, "public-key"))
+					Expect(netcfg.Spec.BackendConfig).To(HaveKeyWithValue(consts.ListeningPort, "9999"))
 				}
 
 				AssertNetworkConfigCorrectness := func() func() {
@@ -205,14 +219,6 @@ var _ = Describe("NetworkConfigCreator Controller", func() {
 				discoveryv1alpha1.PeeringConditionStatusNone, "", "")
 		})
 
-		AssertNetworkConfigAbsence := func() func() {
-			return func() {
-				var networkConfigList netv1alpha1.NetworkConfigList
-				Expect(ncc.List(ctx, &networkConfigList, client.InNamespace(namespace))).To(Succeed())
-				Expect(networkConfigList.Items).To(HaveLen(0))
-			}
-		}
-
 		When("the NetworkConfig does exist", func() {
 			BeforeEach(CreateNetworkConfig())
 			It("should succeed", func() { Expect(err).ToNot(HaveOccurred()) })
@@ -223,5 +229,60 @@ var _ = Describe("NetworkConfigCreator Controller", func() {
 			It("should succeed", func() { Expect(err).ToNot(HaveOccurred()) })
 			It("should ensure the absence of the NetworkConfig", AssertNetworkConfigAbsence())
 		})
+	})
+
+	When("the ForeignCluster has not networking enabled", func() {
+		DisableNetworking := func() {
+			fc.Spec.NetworkingEnabled = discoveryv1alpha1.NetworkingEnabledNo
+		}
+
+		BeforeEach(DisableNetworking)
+
+		ContextBody := func(initializer func()) func() {
+			return func() {
+				BeforeEach(initializer)
+
+				When("the NetworkConfig does exist", func() {
+					BeforeEach(CreateNetworkConfig())
+					It("should succeed", func() { Expect(err).ToNot(HaveOccurred()) })
+					It("should ensure the absence of the NetworkConfig", AssertNetworkConfigAbsence())
+				})
+
+				When("the NetworkConfig does not exist", func() {
+					It("should succeed", func() { Expect(err).ToNot(HaveOccurred()) })
+					It("should ensure the absence of the NetworkConfig", AssertNetworkConfigAbsence())
+				})
+			}
+		}
+
+		Context("peering is enabled", func() {
+			Context("incoming peering", ContextBody(func() {
+				peeringconditionsutils.EnsureStatus(fc, discoveryv1alpha1.IncomingPeeringCondition,
+					discoveryv1alpha1.PeeringConditionStatusEstablished, "", "")
+				peeringconditionsutils.EnsureStatus(fc, discoveryv1alpha1.OutgoingPeeringCondition,
+					discoveryv1alpha1.PeeringConditionStatusNone, "", "")
+			}))
+
+			Context("outgoing peering", ContextBody(func() {
+				peeringconditionsutils.EnsureStatus(fc, discoveryv1alpha1.IncomingPeeringCondition,
+					discoveryv1alpha1.PeeringConditionStatusNone, "", "")
+				peeringconditionsutils.EnsureStatus(fc, discoveryv1alpha1.OutgoingPeeringCondition,
+					discoveryv1alpha1.PeeringConditionStatusEstablished, "", "")
+			}))
+
+			Context("bidirectional peering", ContextBody(func() {
+				peeringconditionsutils.EnsureStatus(fc, discoveryv1alpha1.IncomingPeeringCondition,
+					discoveryv1alpha1.PeeringConditionStatusEstablished, "", "")
+				peeringconditionsutils.EnsureStatus(fc, discoveryv1alpha1.OutgoingPeeringCondition,
+					discoveryv1alpha1.PeeringConditionStatusEstablished, "", "")
+			}))
+		})
+
+		Context("peering is not enabled", ContextBody(func() {
+			peeringconditionsutils.EnsureStatus(fc, discoveryv1alpha1.IncomingPeeringCondition,
+				discoveryv1alpha1.PeeringConditionStatusNone, "", "")
+			peeringconditionsutils.EnsureStatus(fc, discoveryv1alpha1.OutgoingPeeringCondition,
+				discoveryv1alpha1.PeeringConditionStatusNone, "", "")
+		}))
 	})
 })

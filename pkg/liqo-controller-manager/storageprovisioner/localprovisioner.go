@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -31,9 +31,10 @@ import (
 func (p *liqoLocalStorageProvisioner) provisionLocalPVC(ctx context.Context,
 	options controller.ProvisionOptions) (*v1.PersistentVolume, controller.ProvisioningState, error) {
 	virtualPvc := options.PVC
+	realPvcName := virtualPvc.GetUID()
 	realPvc := v1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      virtualPvc.Name,
+			Name:      string(realPvcName),
 			Namespace: p.storageNamespace,
 		},
 	}
@@ -108,6 +109,12 @@ func (p *liqoLocalStorageProvisioner) mutateLocalRealPVC(virtualPvc, realPvc *v1
 	realPvc.ObjectMeta.Annotations["volume.kubernetes.io/selected-node"] = selectedNode.Name
 	realPvc.ObjectMeta.Annotations["volume.alpha.kubernetes.io/selected-node"] = selectedNode.Name
 
+	if realPvc.ObjectMeta.Labels == nil {
+		realPvc.ObjectMeta.Labels = map[string]string{}
+	}
+	realPvc.ObjectMeta.Labels[consts.VirtualPvcNamespaceLabel] = virtualPvc.GetNamespace()
+	realPvc.ObjectMeta.Labels[consts.VirtualPvcNameLabel] = virtualPvc.GetName()
+
 	storageClassName := realPvc.Spec.StorageClassName
 	if p.localRealStorageClass != "" {
 		storageClassName = &p.localRealStorageClass
@@ -122,15 +129,21 @@ func (p *liqoLocalStorageProvisioner) mutateLocalRealPVC(virtualPvc, realPvc *v1
 }
 
 func mergeAffinities(vol1, vol2 *v1.PersistentVolumeSpec) *v1.VolumeNodeAffinity {
-	if vol1.NodeAffinity == nil || vol1.NodeAffinity.Required.NodeSelectorTerms == nil {
-		return vol1.NodeAffinity.DeepCopy()
-	}
-	if vol2.NodeAffinity == nil || vol2.NodeAffinity.Required.NodeSelectorTerms == nil {
+	if emptyVolumeNodeAffinity(vol1) {
 		return vol2.NodeAffinity.DeepCopy()
+	}
+	if emptyVolumeNodeAffinity(vol2) {
+		return vol1.NodeAffinity.DeepCopy()
 	}
 
 	selector := utils.MergeNodeSelector(vol1.NodeAffinity.Required, vol2.NodeAffinity.Required)
 	return &v1.VolumeNodeAffinity{
 		Required: &selector,
 	}
+}
+
+func emptyVolumeNodeAffinity(vol *v1.PersistentVolumeSpec) bool {
+	return vol.NodeAffinity == nil ||
+		vol.NodeAffinity.Required.NodeSelectorTerms == nil ||
+		len(vol.NodeAffinity.Required.NodeSelectorTerms) == 0
 }

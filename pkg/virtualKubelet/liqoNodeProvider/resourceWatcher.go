@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -36,7 +36,7 @@ import (
 // update the virtual node.
 func (p *LiqoNodeProvider) StartProvider(ctx context.Context) (ready chan struct{}) {
 	resource := "resourceoffers"
-	namespace := p.kubeletNamespace
+	namespace := p.tenantNamespace
 
 	sharingInformerFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(
 		p.dynClient, p.resyncPeriod, namespace, func(opt *metav1.ListOptions) {

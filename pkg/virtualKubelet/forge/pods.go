@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,145 +15,135 @@
 package forge
 
 import (
-	"context"
-	"fmt"
 	"strings"
 
+	"github.com/virtual-kubelet/virtual-kubelet/node/api/statsv1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/klog/v2"
+	corev1apply "k8s.io/client-go/applyconfigurations/core/v1"
+	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 
+	vkv1alpha1 "github.com/liqotech/liqo/apis/virtualkubelet/v1alpha1"
 	liqoconst "github.com/liqotech/liqo/pkg/consts"
-	liqonetIpam "github.com/liqotech/liqo/pkg/liqonet/ipam"
-	"github.com/liqotech/liqo/pkg/virtualKubelet"
-	apimgmt "github.com/liqotech/liqo/pkg/virtualKubelet/apiReflection"
-	"github.com/liqotech/liqo/pkg/virtualKubelet/apiReflection/reflectors"
 )
 
-const affinitySelector = liqoconst.TypeNode
+const (
+	// PodOffloadingBackoffReason -> the reason assigned to pods rejected by the virtual kubelet before offloading has started.
+	PodOffloadingBackoffReason = "OffloadingBackoff"
+	// PodOffloadingAbortedReason -> the reason assigned to pods rejected by the virtual kubelet after offloading has started.
+	PodOffloadingAbortedReason = "OffloadingAborted"
+)
 
-func (f *apiForger) podForeignToHome(foreignObj, homeObj runtime.Object, reflectionType string) (*corev1.Pod, error) {
-	var isNewObject bool
+// PodIPTranslator defines the function to translate between remote and local IP addresses.
+type PodIPTranslator func(string) string
 
-	if homeObj == nil {
-		isNewObject = true
+// LocalPod forges the object meta and status of the local pod, given the remote one.
+func LocalPod(local, remote *corev1.Pod, translator PodIPTranslator, restarts int32) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: *local.ObjectMeta.DeepCopy(),
+		Status:     LocalPodStatus(remote.Status.DeepCopy(), translator, restarts),
+	}
+}
 
-		homeObj = &corev1.Pod{
-			TypeMeta:   metav1.TypeMeta{},
-			ObjectMeta: metav1.ObjectMeta{},
-			Spec:       corev1.PodSpec{},
+// LocalPodOffloadedLabel forges the apply patch to add the appropriate label to the offloaded pod.
+func LocalPodOffloadedLabel(local *corev1.Pod) (*corev1apply.PodApplyConfiguration, bool) {
+	if value, found := local.Labels[liqoconst.LocalPodLabelKey]; found && value == liqoconst.LocalPodLabelValue {
+		return nil, false
+	}
+
+	return corev1apply.Pod(local.GetName(), local.GetNamespace()).
+		WithLabels(map[string]string{liqoconst.LocalPodLabelKey: liqoconst.LocalPodLabelValue}), true
+}
+
+// LocalPodStatus forges the status of the local pod, given the remote one.
+func LocalPodStatus(remote *corev1.PodStatus, translator PodIPTranslator, restarts int32) corev1.PodStatus {
+	// Translate the relevant IPs
+	if remote.PodIP != "" {
+		remote.PodIP = translator(remote.PodIP)
+		remote.PodIPs = []corev1.PodIP{{IP: remote.PodIP}}
+	}
+	remote.HostIP = LiqoNodeIP
+
+	// Increase the restart count if necessary
+	for idx := range remote.ContainerStatuses {
+		remote.ContainerStatuses[idx].RestartCount += restarts
+	}
+
+	return *remote
+}
+
+// LocalRejectedPod forges the status of a local rejected pod.
+func LocalRejectedPod(local *corev1.Pod, phase corev1.PodPhase, reason string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: *local.ObjectMeta.DeepCopy(),
+		Status:     LocalRejectedPodStatus(local.Status.DeepCopy(), phase, reason),
+	}
+}
+
+// LocalRejectedPodStatus forges the status of the local rejected pod.
+func LocalRejectedPodStatus(local *corev1.PodStatus, phase corev1.PodPhase, reason string) corev1.PodStatus {
+	local.Phase = phase
+	local.Reason = reason
+
+	for i := range local.Conditions {
+		if local.Conditions[i].Status == corev1.ConditionTrue {
+			local.Conditions[i].Status = corev1.ConditionFalse
+			local.Conditions[i].Reason = reason
+			local.Conditions[i].LastTransitionTime = metav1.Now()
 		}
 	}
 
-	foreignPod := foreignObj.(*corev1.Pod)
-	homePod := homeObj.(*corev1.Pod)
-
-	foreignNamespace, err := f.nattingTable.DeNatNamespace(foreignPod.Namespace)
-	if err != nil {
-		return nil, err
+	for i := range local.ContainerStatuses {
+		local.ContainerStatuses[i].Ready = false
 	}
 
-	f.forgeHomeMeta(&foreignPod.ObjectMeta, &homePod.ObjectMeta, foreignNamespace, reflectionType)
-	delete(homePod.Labels, virtualKubelet.ReflectedpodKey)
-
-	if isNewObject {
-		homePod.Spec = f.forgePodSpec(foreignPod.Spec)
-	}
-
-	return homePod, nil
+	return *local
 }
 
-func (f *apiForger) podStatusForeignToHome(foreignObj, homeObj runtime.Object) *corev1.Pod {
-	homePod := homeObj.(*corev1.Pod)
-	foreignPod := foreignObj.(*corev1.Pod)
-
-	homePod.Status = foreignPod.Status
-	if homePod.Status.PodIP != "" {
-		response, err := f.ipamClient.GetHomePodIP(context.Background(),
-			&liqonetIpam.GetHomePodIPRequest{
-				ClusterID: RemoteClusterID,
-				Ip:        foreignPod.Status.PodIP,
-			})
-		if err != nil {
-			klog.Error(err)
-		}
-		homePod.Status.PodIP = response.GetHomeIP()
-		homePod.Status.PodIPs[0].IP = response.GetHomeIP()
+// RemoteShadowPod forges the reflected shadowpod, given the local one.
+func RemoteShadowPod(local *corev1.Pod, remote *vkv1alpha1.ShadowPod, targetNamespace string) *vkv1alpha1.ShadowPod {
+	if remote == nil {
+		// The remote is nil if not already created.
+		remote = &vkv1alpha1.ShadowPod{ObjectMeta: metav1.ObjectMeta{Name: local.GetName(), Namespace: targetNamespace}}
 	}
 
-	if foreignPod.DeletionTimestamp != nil {
-		homePod.DeletionTimestamp = nil
-		foreignKey := fmt.Sprintf("%s/%s", foreignPod.Namespace, foreignPod.Name)
-		reflectors.Blacklist[apimgmt.Pods][foreignKey] = struct{}{}
-		klog.V(3).Infof("pod %s blacklisted because marked for deletion", foreignKey)
+	// Remove the label which identifies offloaded pods, as meaningful only locally.
+	FilterLocalPodOffloadedLabel := func(meta *metav1.ObjectMeta) *metav1.ObjectMeta {
+		output := meta.DeepCopy()
+		delete(output.GetLabels(), liqoconst.LocalPodLabelKey)
+		return output
 	}
 
-	return homePod
+	return &vkv1alpha1.ShadowPod{
+		ObjectMeta: RemoteObjectMeta(FilterLocalPodOffloadedLabel(&local.ObjectMeta), &remote.ObjectMeta),
+		Spec: vkv1alpha1.ShadowPodSpec{
+			Pod: RemotePodSpec(local.Spec.DeepCopy(), remote.Spec.Pod.DeepCopy()),
+		},
+	}
 }
 
-// Set pod's container statutes to terminated so that the pod can be deleted.
-func (f *apiForger) setPodToBeDeleted(pod *corev1.Pod) *corev1.Pod {
-	pod.Status.Phase = corev1.PodUnknown
-	for i := range pod.Status.ContainerStatuses {
-		pod.Status.ContainerStatuses[i].State = corev1.ContainerState{
-			Terminated: &corev1.ContainerStateTerminated{},
-		}
-	}
+// RemotePodSpec forges the specs of the reflected pod specs, given the local ones.
+// It expects the local and remote objects to be deepcopies, as they are mutated.
+func RemotePodSpec(local, remote *corev1.PodSpec) corev1.PodSpec {
+	remote.TerminationGracePeriodSeconds = local.TerminationGracePeriodSeconds
+	remote.Volumes = forgeVolumes(local.Volumes)
+	remote.InitContainers = forgeContainers(local.InitContainers, remote.Volumes)
+	remote.Containers = forgeContainers(local.Containers, remote.Volumes)
+	remote.Tolerations = RemoteTolerations(local.Tolerations)
+	remote.EnableServiceLinks = local.EnableServiceLinks
+	remote.Hostname = local.Hostname
+	remote.Subdomain = local.Subdomain
+	remote.TopologySpreadConstraints = local.TopologySpreadConstraints
+	remote.RestartPolicy = local.RestartPolicy
+	remote.AutomountServiceAccountToken = local.AutomountServiceAccountToken
+	remote.SecurityContext = local.SecurityContext
 
-	return pod
+	return *remote
 }
 
-func (f *apiForger) podHomeToForeign(homeObj, foreignObj runtime.Object, reflectionType string) (*corev1.Pod, error) {
-	var isNewObject bool
-	var homePod, foreignPod *corev1.Pod
-
-	if foreignObj == nil {
-		isNewObject = true
-
-		foreignPod = &corev1.Pod{
-			TypeMeta:   metav1.TypeMeta{},
-			ObjectMeta: metav1.ObjectMeta{},
-			Spec:       corev1.PodSpec{},
-		}
-	} else {
-		foreignPod = foreignObj.(*corev1.Pod)
-	}
-
-	homePod = homeObj.(*corev1.Pod)
-
-	foreignNamespace, err := f.nattingTable.NatNamespace(homePod.Namespace)
-	if err != nil {
-		return nil, err
-	}
-
-	f.forgeForeignMeta(&homePod.ObjectMeta, &foreignPod.ObjectMeta, foreignNamespace, reflectionType)
-
-	if isNewObject {
-		foreignPod.Spec = f.forgePodSpec(homePod.Spec)
-		foreignPod.Spec.Affinity = forgeAffinity()
-	}
-
-	return foreignPod, nil
-}
-
-func (f *apiForger) forgePodSpec(inputPodSpec corev1.PodSpec) corev1.PodSpec {
-	outputPodSpec := corev1.PodSpec{}
-
-	outputPodSpec.TerminationGracePeriodSeconds = inputPodSpec.TerminationGracePeriodSeconds
-	outputPodSpec.Volumes = forgeVolumes(inputPodSpec.Volumes)
-	outputPodSpec.InitContainers = forgeContainers(inputPodSpec.InitContainers, outputPodSpec.Volumes)
-	outputPodSpec.Containers = forgeContainers(inputPodSpec.Containers, outputPodSpec.Volumes)
-	outputPodSpec.Tolerations = Tolerations(inputPodSpec.Tolerations)
-	outputPodSpec.EnableServiceLinks = inputPodSpec.EnableServiceLinks
-	outputPodSpec.Hostname = inputPodSpec.Hostname
-	outputPodSpec.Subdomain = inputPodSpec.Subdomain
-
-	return outputPodSpec
-}
-
-// Tolerations forges the tolerations for a reflected pod.
-func Tolerations(inputTolerations []corev1.Toleration) []corev1.Toleration {
+// RemoteTolerations forges the tolerations for a reflected pod.
+func RemoteTolerations(inputTolerations []corev1.Toleration) []corev1.Toleration {
 	tolerations := make([]corev1.Toleration, 0)
 
 	for _, toleration := range inputTolerations {
@@ -203,7 +193,7 @@ func translateContainer(container corev1.Container, volumes []corev1.VolumeMount
 func forgeVolumes(volumesIn []corev1.Volume) []corev1.Volume {
 	volumesOut := make([]corev1.Volume, 0)
 	for _, v := range volumesIn {
-		if v.ConfigMap != nil || v.EmptyDir != nil || v.DownwardAPI != nil || v.Projected != nil {
+		if v.ConfigMap != nil || v.EmptyDir != nil || v.DownwardAPI != nil || v.Projected != nil || v.PersistentVolumeClaim != nil {
 			volumesOut = append(volumesOut, v)
 		}
 		// copy all volumes of type Secret except for the default token
@@ -227,22 +217,96 @@ func filterVolumeMounts(volumes []corev1.Volume, volumeMountsIn []corev1.VolumeM
 	return volumeMounts
 }
 
-func forgeAffinity() *corev1.Affinity {
-	return &corev1.Affinity{
-		NodeAffinity: &corev1.NodeAffinity{
-			RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
-				NodeSelectorTerms: []corev1.NodeSelectorTerm{
-					{
-						MatchExpressions: []corev1.NodeSelectorRequirement{
-							{
-								Key:      liqoconst.TypeLabel,
-								Operator: corev1.NodeSelectorOpNotIn,
-								Values:   []string{affinitySelector},
-							},
-						},
-					},
-				},
+// LocalNodeStats forges the summary stats for the node managed by the virtual kubelet.
+func LocalNodeStats(pods []statsv1alpha1.PodStats) *statsv1alpha1.Summary {
+	now := metav1.Now()
+
+	return &statsv1alpha1.Summary{
+		Node: statsv1alpha1.NodeStats{
+			NodeName: LiqoNodeName, StartTime: metav1.NewTime(StartTime),
+			CPU: &statsv1alpha1.CPUStats{
+				Time:           now,
+				UsageNanoCores: SumPodStats(pods, func(s statsv1alpha1.PodStats) uint64 { return *s.CPU.UsageNanoCores }),
+			},
+			Memory: &statsv1alpha1.MemoryStats{
+				Time:            now,
+				UsageBytes:      SumPodStats(pods, func(s statsv1alpha1.PodStats) uint64 { return *s.Memory.UsageBytes }),
+				WorkingSetBytes: SumPodStats(pods, func(s statsv1alpha1.PodStats) uint64 { return *s.Memory.WorkingSetBytes }),
 			},
 		},
+		Pods: pods,
 	}
+}
+
+// LocalPodStats forges the metric stats for a local pod managed by the virtual kubelet.
+func LocalPodStats(pod *corev1.Pod, metrics *metricsv1beta1.PodMetrics) statsv1alpha1.PodStats {
+	now := metav1.Now()
+	containers := LocalContainersStats(metrics.Containers, pod.GetCreationTimestamp(), now)
+
+	return statsv1alpha1.PodStats{
+		PodRef: statsv1alpha1.PodReference{
+			Name:      pod.GetName(),
+			Namespace: pod.GetNamespace(),
+			UID:       string(pod.GetUID()),
+		},
+		StartTime:  pod.GetCreationTimestamp(),
+		Containers: containers,
+		CPU: &statsv1alpha1.CPUStats{
+			Time:           now,
+			UsageNanoCores: SumContainerStats(containers, func(s statsv1alpha1.ContainerStats) uint64 { return *s.CPU.UsageNanoCores }),
+		},
+		Memory: &statsv1alpha1.MemoryStats{
+			Time:            now,
+			UsageBytes:      SumContainerStats(containers, func(s statsv1alpha1.ContainerStats) uint64 { return *s.Memory.UsageBytes }),
+			WorkingSetBytes: SumContainerStats(containers, func(s statsv1alpha1.ContainerStats) uint64 { return *s.Memory.WorkingSetBytes }),
+		},
+	}
+}
+
+// LocalContainersStats forges the metric stats for the containers of a local pod.
+func LocalContainersStats(metrics []metricsv1beta1.ContainerMetrics, start, now metav1.Time) []statsv1alpha1.ContainerStats {
+	var stats []statsv1alpha1.ContainerStats
+
+	for idx := range metrics {
+		stats = append(stats, LocalContainerStats(&metrics[idx], start, now))
+	}
+
+	return stats
+}
+
+// LocalContainerStats forges the metric stats for a container of a local pod.
+func LocalContainerStats(metrics *metricsv1beta1.ContainerMetrics, start, now metav1.Time) statsv1alpha1.ContainerStats {
+	Uint64Ptr := func(value uint64) *uint64 { return &value }
+
+	return statsv1alpha1.ContainerStats{
+		Name:      metrics.Name,
+		StartTime: start,
+		CPU: &statsv1alpha1.CPUStats{
+			Time:           now,
+			UsageNanoCores: Uint64Ptr(uint64(metrics.Usage.Cpu().ScaledValue(resource.Nano))),
+		},
+		Memory: &statsv1alpha1.MemoryStats{
+			Time:            now,
+			UsageBytes:      Uint64Ptr(uint64(metrics.Usage.Memory().Value())),
+			WorkingSetBytes: Uint64Ptr(uint64(metrics.Usage.Memory().Value())),
+		},
+	}
+}
+
+// SumPodStats returns the sum of the pod stats, given a metric retriever.
+func SumPodStats(stats []statsv1alpha1.PodStats, retriever func(statsv1alpha1.PodStats) uint64) *uint64 {
+	var sum uint64
+	for idx := range stats {
+		sum += retriever(stats[idx])
+	}
+	return &sum
+}
+
+// SumContainerStats returns the sum of the container stats, given a metric retriever.
+func SumContainerStats(stats []statsv1alpha1.ContainerStats, retriever func(statsv1alpha1.ContainerStats) uint64) *uint64 {
+	var sum uint64
+	for idx := range stats {
+		sum += retriever(stats[idx])
+	}
+	return &sum
 }

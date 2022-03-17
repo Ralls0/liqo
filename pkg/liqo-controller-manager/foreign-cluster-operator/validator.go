@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@ package foreignclusteroperator
 import (
 	"context"
 	"fmt"
+	"net/url"
 
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -35,7 +36,7 @@ func (r *ForeignClusterReconciler) validateForeignCluster(ctx context.Context,
 	if r.needsClusterIdentityDefaulting(foreignCluster) {
 		// this ForeignCluster has not all the cluster identity fields (clusterID and clusterName),
 		// get them from the foreignAuthUrl.
-		if err := r.clusterIdentityDefaulting(foreignCluster); err != nil {
+		if err := r.clusterIdentityDefaulting(ctx, foreignCluster); err != nil {
 			klog.Error(err)
 			return false, ctrl.Result{
 				Requeue:      true,
@@ -75,13 +76,14 @@ func (r *ForeignClusterReconciler) validateForeignCluster(ctx context.Context,
 
 // isClusterProcessable checks if the provided ForeignCluster is processable.
 // It can not be processable if:
-// * the clusterID is the same of the local cluster
-// * the same clusterID is already present in a previously created ForeignCluster.
+// * the clusterID is the same of the local cluster;
+// * the same clusterID is already present in a previously created ForeignCluster
+// * the specified foreign proxy URL is invalid, if set to a value different that empty string.
 func (r *ForeignClusterReconciler) isClusterProcessable(ctx context.Context,
 	foreignCluster *discoveryv1alpha1.ForeignCluster) (bool, error) {
 	foreignClusterID := foreignCluster.Spec.ClusterIdentity.ClusterID
 
-	if foreignClusterID == r.ClusterID {
+	if foreignClusterID == r.HomeCluster.ClusterID {
 		// this is the local cluster, it is not processable
 		peeringconditionsutils.EnsureStatus(foreignCluster,
 			discoveryv1alpha1.ProcessForeignClusterStatusCondition,
@@ -100,8 +102,8 @@ func (r *ForeignClusterReconciler) isClusterProcessable(ctx context.Context,
 		return false, err
 	}
 
+	// these are the same resource, no clusterID repetition
 	if foreignClusterWithSameID.GetUID() == foreignCluster.GetUID() {
-		// these are the same resource, no clusterID repetition
 		peeringconditionsutils.EnsureStatus(foreignCluster,
 			discoveryv1alpha1.ProcessForeignClusterStatusCondition,
 			discoveryv1alpha1.PeeringConditionStatusSuccess,
@@ -110,6 +112,17 @@ func (r *ForeignClusterReconciler) isClusterProcessable(ctx context.Context,
 		)
 
 		return true, nil
+	}
+
+	_, err = url.Parse(foreignCluster.Spec.ForeignProxyURL)
+	if err != nil {
+		peeringconditionsutils.EnsureStatus(foreignCluster,
+			discoveryv1alpha1.ProcessForeignClusterStatusCondition,
+			discoveryv1alpha1.PeeringConditionStatusError,
+			"InvalidProxyURL",
+			fmt.Sprintf("Invalid Proxy URL %s: (%v)", foreignCluster.Spec.ForeignProxyURL, err),
+		)
+		return false, nil
 	}
 
 	peeringconditionsutils.EnsureStatus(foreignCluster,

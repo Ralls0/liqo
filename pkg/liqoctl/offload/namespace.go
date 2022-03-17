@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@ package offload
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
@@ -27,6 +28,7 @@ import (
 	offloadingv1alpha1 "github.com/liqotech/liqo/apis/offloading/v1alpha1"
 	"github.com/liqotech/liqo/pkg/consts"
 	"github.com/liqotech/liqo/pkg/liqoctl/common"
+	"github.com/liqotech/liqo/pkg/utils"
 	argsutils "github.com/liqotech/liqo/pkg/utils/args"
 	logsutils "github.com/liqotech/liqo/pkg/utils/logs"
 )
@@ -68,6 +70,7 @@ func HandleOffloadCommand(ctx context.Context, command *cobra.Command, args []st
 	if err != nil {
 		return err
 	}
+	fmt.Printf(SuccessfulMessage, args[0], args[0], consts.DefaultNamespaceOffloadingName)
 
 	return nil
 }
@@ -77,7 +80,7 @@ func forgeNamespaceOffloading(command *cobra.Command, args []string,
 	return &offloadingv1alpha1.NamespaceOffloading{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      consts.DefaultNamespaceOffloadingName,
-			Namespace: args[1],
+			Namespace: args[0],
 		},
 		Spec: offloadingv1alpha1.NamespaceOffloadingSpec{
 			NamespaceMappingStrategy: forgeNamespaceMappingStrategy(command),
@@ -88,44 +91,33 @@ func forgeNamespaceOffloading(command *cobra.Command, args []string,
 }
 
 func forgeClusterSelector(acceptedLabels, deniedLabels argsutils.StringMap) corev1.NodeSelector {
-	var l []corev1.NodeSelectorTerm
-
-	// No acceptedLabels are defined, backing to the default behavior
-	if len(acceptedLabels.StringMap) == 0 && len(deniedLabels.StringMap) == 0 {
-		return corev1.NodeSelector{
-			NodeSelectorTerms: []corev1.NodeSelectorTerm{{
-				MatchExpressions: []corev1.NodeSelectorRequirement{{
-					Key:      consts.TypeLabel,
-					Operator: corev1.NodeSelectorOpIn,
-					Values:   []string{consts.TypeNode},
-				}}},
-			},
-		}
-	}
+	var l []corev1.NodeSelectorRequirement
 
 	for k, v := range acceptedLabels.StringMap {
-		l = append(l, corev1.NodeSelectorTerm{
-			MatchExpressions: []corev1.NodeSelectorRequirement{{
-				Key:      k,
-				Operator: corev1.NodeSelectorOpIn,
-				Values:   []string{v},
-			},
-			},
+		l = append(l, corev1.NodeSelectorRequirement{
+			Key:      k,
+			Operator: corev1.NodeSelectorOpIn,
+			Values:   []string{v},
 		})
 	}
 
 	for k, v := range deniedLabels.StringMap {
-		l = append(l, corev1.NodeSelectorTerm{
-			MatchExpressions: []corev1.NodeSelectorRequirement{{
-				Key:      k,
-				Operator: corev1.NodeSelectorOpNotIn,
-				Values:   []string{v},
-			},
-			},
+		l = append(l, corev1.NodeSelectorRequirement{
+			Key:      k,
+			Operator: corev1.NodeSelectorOpNotIn,
+			Values:   []string{v},
 		})
 	}
 
-	return corev1.NodeSelector{NodeSelectorTerms: l}
+	nodeSelector := utils.MergeNodeSelector(&corev1.NodeSelector{
+		NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+			MatchExpressions: []corev1.NodeSelectorRequirement{{
+				Key:      consts.TypeLabel,
+				Operator: corev1.NodeSelectorOpIn,
+				Values:   []string{consts.TypeNode},
+			}}}}}, &corev1.NodeSelector{NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+		MatchExpressions: l}}})
+	return nodeSelector
 }
 
 func forgePodOffloadingStrategy(command *cobra.Command) offloadingv1alpha1.PodOffloadingStrategyType {

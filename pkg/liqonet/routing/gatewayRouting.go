@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -64,11 +64,11 @@ func (grm *GatewayRoutingManager) EnsureRoutesPerCluster(tep *netv1alpha1.Tunnel
 	_, dstPodCIDRNet := utils.GetPodCIDRS(tep)
 	_, dstExternalCIDRNet := utils.GetExternalCIDRS(tep)
 	// Add routes for the given cluster.
-	routePodCIDRAdd, err = AddRoute(dstPodCIDRNet, "", grm.tunnelDevice.Attrs().Index, grm.routingTableID)
+	routePodCIDRAdd, err = AddRoute(dstPodCIDRNet, "", grm.tunnelDevice.Attrs().Index, grm.routingTableID, DefaultFlags, DefaultScope)
 	if err != nil {
 		return routePodCIDRAdd, err
 	}
-	routeExternalCIDRAdd, err = AddRoute(dstExternalCIDRNet, "", grm.tunnelDevice.Attrs().Index, grm.routingTableID)
+	routeExternalCIDRAdd, err = AddRoute(dstExternalCIDRNet, "", grm.tunnelDevice.Attrs().Index, grm.routingTableID, DefaultFlags, DefaultScope)
 	if err != nil {
 		return routeExternalCIDRAdd, err
 	}

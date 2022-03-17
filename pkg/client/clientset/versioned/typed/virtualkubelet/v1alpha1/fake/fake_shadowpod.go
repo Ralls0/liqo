@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -35,9 +35,9 @@ type FakeShadowPods struct {
 	ns   string
 }
 
-var shadowpodsResource = schema.GroupVersionResource{Group: "virtualkubelet", Version: "v1alpha1", Resource: "shadowpods"}
+var shadowpodsResource = schema.GroupVersionResource{Group: "virtualkubelet.liqo.io", Version: "v1alpha1", Resource: "shadowpods"}
 
-var shadowpodsKind = schema.GroupVersionKind{Group: "virtualkubelet", Version: "v1alpha1", Kind: "ShadowPod"}
+var shadowpodsKind = schema.GroupVersionKind{Group: "virtualkubelet.liqo.io", Version: "v1alpha1", Kind: "ShadowPod"}
 
 // Get takes name of the shadowPod, and returns the corresponding shadowPod object, and an error if there is any.
 func (c *FakeShadowPods) Get(ctx context.Context, name string, options v1.GetOptions) (result *v1alpha1.ShadowPod, err error) {

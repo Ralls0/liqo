@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -28,7 +28,7 @@ const (
 	// PeeringConditionStatusNone indicates that there is no peering.
 	PeeringConditionStatusNone PeeringConditionStatusType = "None"
 	// PeeringConditionStatusPending indicates that the peering is pending,
-	// and we are waiting for the remote cluster feedback.
+	// and we are either waiting for the remote cluster feedback or for us to accept the ResourceOffer.
 	PeeringConditionStatusPending PeeringConditionStatusType = "Pending"
 	// PeeringConditionStatusEstablished indicates that the peering has been established.
 	PeeringConditionStatusEstablished PeeringConditionStatusType = "Established"
@@ -66,6 +66,18 @@ const (
 	PeeringEnabledYes PeeringEnabledType = "Yes"
 )
 
+// NetworkingEnabledType indicates the desired state for the network interconnection with this remote cluster.
+type NetworkingEnabledType string
+
+const (
+	// NetworkingEnabledNo indicates to not handle the network interconnection with this remote cluster.
+	NetworkingEnabledNo NetworkingEnabledType = "No"
+	// NetworkingEnabledYes indicates to handle the network interconnection with this remote cluster.
+	NetworkingEnabledYes NetworkingEnabledType = "Yes"
+	// NetworkingEnabledNone is a placeholder to be used when the state of the networking is not known.
+	NetworkingEnabledNone NetworkingEnabledType = "None"
+)
+
 // ForeignClusterSpec defines the desired state of ForeignCluster.
 type ForeignClusterSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
@@ -83,9 +95,17 @@ type ForeignClusterSpec struct {
 	// +kubebuilder:default="Auto"
 	// +kubebuilder:validation:Optional
 	IncomingPeeringEnabled PeeringEnabledType `json:"incomingPeeringEnabled"`
+	// Indicates if Liqo has to handle the network interconnection with the remote cluster.
+	// +kubebuilder:validation:Enum="No";"Yes"
+	// +kubebuilder:default="Yes"
+	// +kubebuilder:validation:Optional
+	NetworkingEnabled NetworkingEnabledType `json:"networkingEnabled,omitempty"`
 	// URL where to contact foreign Auth service.
 	// +kubebuilder:validation:Pattern=`https:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)`
 	ForeignAuthURL string `json:"foreignAuthUrl"`
+	// URL where to contact foreign proxy for the api server. This URL is used when
+	// creating the k8s clients toward the remote cluster.
+	ForeignProxyURL string `json:"foreignProxyUrl,omitempty"`
 	// Indicates if the local cluster has to skip the tls verification over the remote Authentication Service or not.
 	// +kubebuilder:default=true
 	// +kubebuilder:validation:Optional
@@ -101,7 +121,12 @@ type ClusterIdentity struct {
 	// Foreign Cluster ID, this is a unique identifier of that cluster.
 	ClusterID string `json:"clusterID"`
 	// Foreign Cluster Name to be shown in GUIs.
-	ClusterName string `json:"clusterName,omitempty"`
+	ClusterName string `json:"clusterName"`
+}
+
+// String returns the ClusterName. It makes it possible to format ClusterIdentities with %s.
+func (i *ClusterIdentity) String() string {
+	return i.ClusterName
 }
 
 // ForeignClusterStatus defines the observed state of ForeignCluster.

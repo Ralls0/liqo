@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -49,6 +49,7 @@ func NewRootCommand(ctx context.Context) *cobra.Command {
 	rootCmd.PersistentFlags().AddGoFlagSet(rateFlagset)
 	rootCmd.PersistentFlags().BoolP("debug", "d", false, "Enable/Disable debug mode (default: false)")
 	rootCmd.AddCommand(newInstallCommand(ctx))
+	rootCmd.AddCommand(newUninstallCommand(ctx))
 	rootCmd.AddCommand(newAddCommand(ctx))
 	rootCmd.AddCommand(newRemoveCommand(ctx))
 	rootCmd.AddCommand(newGenerateAddCommand(ctx))
@@ -56,5 +57,8 @@ func NewRootCommand(ctx context.Context) *cobra.Command {
 	rootCmd.AddCommand(newVersionCommand())
 	rootCmd.AddCommand(newStatusCommand(ctx))
 	rootCmd.AddCommand(newOffloadCommand(ctx))
+	rootCmd.AddCommand(newConnectCommand(ctx))
+	rootCmd.AddCommand(newDisconnectCommand(ctx))
+	rootCmd.AddCommand(newMoveCommand(ctx))
 	return rootCmd
 }

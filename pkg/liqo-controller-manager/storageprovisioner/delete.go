@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -27,7 +27,7 @@ import (
 func (p *liqoLocalStorageProvisioner) Delete(ctx context.Context, volume *v1.PersistentVolume) error {
 	realPvc := v1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      volume.Spec.ClaimRef.Name,
+			Name:      string(volume.Spec.ClaimRef.UID),
 			Namespace: p.storageNamespace,
 		},
 	}

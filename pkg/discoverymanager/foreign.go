@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@ package discovery
 
 import (
 	"context"
+	"net/http"
 
 	k8serror "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -43,7 +44,7 @@ func (discovery *Controller) updateForeignLAN(data *discoveryData) {
 	ctx := context.TODO()
 
 	discoveryType := discoveryPkg.LanDiscovery
-	if data.ClusterInfo.ClusterID == discovery.LocalClusterID {
+	if data.ClusterInfo.ClusterID == discovery.LocalCluster.ClusterID {
 		// is local cluster
 		return
 	}
@@ -65,19 +66,19 @@ func (discovery *Controller) updateForeignLAN(data *discoveryData) {
 // for each cluster retrieved with DNS discovery, if it is not the local cluster, check if it is already known, if not
 // create it. In both cases update the ForeignCluster TTL
 // This function also sets an owner reference and a label to the ForeignCluster pointing to the SearchDomain CR.
-func UpdateForeignWAN(ctx context.Context,
-	cl client.Client, localClusterID string,
+func UpdateForeignWAN(ctx context.Context, transport *http.Transport,
+	cl client.Client, localCluster v1alpha1.ClusterIdentity,
 	data []*AuthData, sd *v1alpha1.SearchDomain) []*v1alpha1.ForeignCluster {
 	createdUpdatedForeign := []*v1alpha1.ForeignCluster{}
 	discoveryType := discoveryPkg.WanDiscovery
 	for _, authData := range data {
-		clusterInfo, err := utils.GetClusterInfo(defaultInsecureSkipTLSVerify, authData.getURL())
+		clusterInfo, err := utils.GetClusterInfo(ctx, transport, authData.getURL())
 		if err != nil {
 			klog.Error(err)
 			continue
 		}
 
-		if clusterInfo.ClusterID == localClusterID {
+		if clusterInfo.ClusterID == localCluster.ClusterID {
 			// is local cluster
 			continue
 		}
@@ -112,7 +113,7 @@ func createOrUpdate(ctx context.Context, data *discoveryData, cl client.Client,
 			klog.Error(err)
 			return err
 		}
-		klog.Infof("ForeignCluster %s created", data.ClusterInfo.ClusterID)
+		klog.Infof("ForeignCluster %s created", fc.Spec.ClusterIdentity)
 		if createdUpdatedForeign != nil {
 			*createdUpdatedForeign = append(*createdUpdatedForeign, fc)
 		}
@@ -127,7 +128,7 @@ func createOrUpdate(ctx context.Context, data *discoveryData, cl client.Client,
 			return err
 		}
 		if updated {
-			klog.Infof("ForeignCluster %s updated", data.ClusterInfo.ClusterID)
+			klog.Infof("ForeignCluster %s updated", fc.Spec.ClusterIdentity)
 			if createdUpdatedForeign != nil {
 				*createdUpdatedForeign = append(*createdUpdatedForeign, fc)
 			}
@@ -143,19 +144,20 @@ func createOrUpdate(ctx context.Context, data *discoveryData, cl client.Client,
 func createForeign(
 	ctx context.Context, cl client.Client, data *discoveryData,
 	sd *v1alpha1.SearchDomain, discoveryType discoveryPkg.Type) (*v1alpha1.ForeignCluster, error) {
+	identity := v1alpha1.ClusterIdentity{
+		ClusterID:   data.ClusterInfo.ClusterID,
+		ClusterName: data.ClusterInfo.ClusterName,
+	}
 	fc := &v1alpha1.ForeignCluster{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: data.ClusterInfo.ClusterID,
+			Name: foreignclusterutils.UniqueName(&identity),
 			Labels: map[string]string{
 				discoveryPkg.DiscoveryTypeLabel: string(discoveryType),
-				discoveryPkg.ClusterIDLabel:     data.ClusterInfo.ClusterID,
+				discoveryPkg.ClusterIDLabel:     identity.ClusterID,
 			},
 		},
 		Spec: v1alpha1.ForeignClusterSpec{
-			ClusterIdentity: v1alpha1.ClusterIdentity{
-				ClusterID:   data.ClusterInfo.ClusterID,
-				ClusterName: data.ClusterInfo.ClusterName,
-			},
+			ClusterIdentity:        identity,
 			OutgoingPeeringEnabled: v1alpha1.PeeringEnabledAuto,
 			IncomingPeeringEnabled: v1alpha1.PeeringEnabledAuto,
 			ForeignAuthURL:         data.AuthData.getURL(),

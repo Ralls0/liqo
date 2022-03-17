@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -68,9 +68,9 @@ func (man *tokenManagerMock) createToken() error {
 var _ = Describe("Auth", func() {
 
 	var (
-		cluster     testutil.Cluster
-		clusterID   string
-		authService Controller
+		cluster         testutil.Cluster
+		clusterIdentity discoveryv1alpha1.ClusterIdentity
+		authService     Controller
 
 		tMan tokenManagerMock
 
@@ -95,7 +95,10 @@ var _ = Describe("Auth", func() {
 		secretInformer := informerFactory.Core().V1().Secrets().Informer()
 		secretInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{})
 
-		clusterID = "default"
+		clusterIdentity = discoveryv1alpha1.ClusterIdentity{
+			ClusterID:   "default-cluster-id",
+			ClusterName: "default-cluster-name",
+		}
 
 		stopChan = make(chan struct{})
 		informerFactory.Start(stopChan)
@@ -103,7 +106,7 @@ var _ = Describe("Auth", func() {
 
 		namespaceManager := tenantnamespace.NewTenantNamespaceManager(cluster.GetClient())
 		identityProvider := identitymanager.NewCertificateIdentityProvider(
-			context.Background(), cluster.GetClient(), clusterID, namespaceManager)
+			context.Background(), cluster.GetClient(), clusterIdentity, namespaceManager)
 
 		config := apiserver.Config{Address: cluster.GetCfg().Host, TrustedCA: false}
 		Expect(config.Complete(cluster.GetCfg(), cluster.GetClient())).To(Succeed())
@@ -112,7 +115,7 @@ var _ = Describe("Auth", func() {
 			namespace:            "default",
 			clientset:            cluster.GetClient(),
 			secretInformer:       secretInformer,
-			localClusterID:       clusterID,
+			localCluster:         clusterIdentity,
 			namespaceManager:     namespaceManager,
 			identityProvider:     identityProvider,
 			credentialsValidator: &tokenValidator{},
@@ -175,8 +178,8 @@ var _ = Describe("Auth", func() {
 
 			Entry("empty token accepted", credentialValidatorTestcase{
 				credentials: auth.ServiceAccountIdentityRequest{
-					Token:     "",
-					ClusterID: "test1",
+					Token:           "",
+					ClusterIdentity: discoveryv1alpha1.ClusterIdentity{ClusterID: "test", ClusterName: "test"},
 				},
 				authEnabled:    false,
 				expectedOutput: BeNil(),
@@ -184,8 +187,8 @@ var _ = Describe("Auth", func() {
 
 			Entry("empty token denied", credentialValidatorTestcase{
 				credentials: auth.ServiceAccountIdentityRequest{
-					Token:     "",
-					ClusterID: "test1",
+					Token:           "",
+					ClusterIdentity: discoveryv1alpha1.ClusterIdentity{ClusterID: "test", ClusterName: "test"},
 				},
 				authEnabled:    true,
 				expectedOutput: HaveOccurred(),
@@ -193,8 +196,8 @@ var _ = Describe("Auth", func() {
 
 			Entry("token accepted", credentialValidatorTestcase{
 				credentials: auth.ServiceAccountIdentityRequest{
-					Token:     "token",
-					ClusterID: "test1",
+					Token:           "token",
+					ClusterIdentity: discoveryv1alpha1.ClusterIdentity{ClusterID: "test", ClusterName: "test"},
 				},
 				authEnabled:    true,
 				expectedOutput: BeNil(),
@@ -202,8 +205,8 @@ var _ = Describe("Auth", func() {
 
 			Entry("token denied", credentialValidatorTestcase{
 				credentials: auth.ServiceAccountIdentityRequest{
-					Token:     "token-wrong",
-					ClusterID: "test1",
+					Token:           "token-wrong",
+					ClusterIdentity: discoveryv1alpha1.ClusterIdentity{ClusterID: "test", ClusterName: "test"},
 				},
 				authEnabled:    true,
 				expectedOutput: HaveOccurred(),
@@ -235,7 +238,7 @@ var _ = Describe("Auth", func() {
 
 		DescribeTable("Certificate Identity Creation table",
 			func(c certificateTestcase) {
-				req, err := testutil.FakeCSRRequest(authService.localClusterID)
+				req, err := testutil.FakeCSRRequest(authService.localCluster.ClusterID)
 				Expect(err).To(BeNil())
 				c.request.CertificateSigningRequest = base64.StdEncoding.EncodeToString(req)
 
@@ -246,7 +249,7 @@ var _ = Describe("Auth", func() {
 
 			Entry("first creation", certificateTestcase{
 				request: auth.CertificateIdentityRequest{
-					ClusterID:                 "cluster1",
+					ClusterIdentity:           discoveryv1alpha1.ClusterIdentity{ClusterID: "cluster1", ClusterName: "cluster1"},
 					CertificateSigningRequest: string(csr),
 				},
 				expectedOutput: BeNil(),
@@ -257,7 +260,7 @@ var _ = Describe("Auth", func() {
 
 			Entry("second creation", certificateTestcase{
 				request: auth.CertificateIdentityRequest{
-					ClusterID:                 "cluster1",
+					ClusterIdentity:           discoveryv1alpha1.ClusterIdentity{ClusterID: "cluster1", ClusterName: "cluster1"},
 					CertificateSigningRequest: string(csr),
 				},
 				expectedOutput: HaveOccurred(),
@@ -268,7 +271,7 @@ var _ = Describe("Auth", func() {
 
 			Entry("create different one", certificateTestcase{
 				request: auth.CertificateIdentityRequest{
-					ClusterID:                 "cluster2",
+					ClusterIdentity:           discoveryv1alpha1.ClusterIdentity{ClusterID: "cluster2", ClusterName: "cluster2"},
 					CertificateSigningRequest: string(csr),
 				},
 				expectedOutput: BeNil(),
@@ -294,7 +297,7 @@ var _ = Describe("Auth", func() {
 
 				recorder.Flush()
 
-				body, err := ioutil.ReadAll(recorder.Body)
+				body, err := io.ReadAll(recorder.Body)
 				Expect(err).To(Succeed())
 				Expect(string(body)).To(ContainSubstring(string(c.body)))
 				Expect(recorder.Code).To(Equal(c.code))

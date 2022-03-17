@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,6 +19,8 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 
+	discoveryv1alpha1 "github.com/liqotech/liqo/apis/discovery/v1alpha1"
+	sharingv1alpha1 "github.com/liqotech/liqo/apis/sharing/v1alpha1"
 	liqoconst "github.com/liqotech/liqo/pkg/consts"
 	vk "github.com/liqotech/liqo/pkg/vkMachinery"
 )
@@ -96,20 +98,38 @@ func forgeVKInitContainers(nodeName string, opts *VirtualKubeletOpts) []v1.Conta
 	}
 }
 
+func getDeafultStorageClass(storageClasses []sharingv1alpha1.StorageType) sharingv1alpha1.StorageType {
+	for _, storageClass := range storageClasses {
+		if storageClass.Default {
+			return storageClass
+		}
+	}
+	return storageClasses[0]
+}
+
 func forgeVKContainers(
-	vkImage string, remoteClusterID,
-	nodeName, vkNamespace, liqoNamespace, homeClusterID string, opts *VirtualKubeletOpts) []v1.Container {
+	vkImage string, homeCluster, remoteCluster discoveryv1alpha1.ClusterIdentity,
+	nodeName, vkNamespace, liqoNamespace string, opts *VirtualKubeletOpts,
+	resourceOffer *sharingv1alpha1.ResourceOffer) []v1.Container {
 	command := []string{
 		"/usr/bin/virtual-kubelet",
 	}
 
 	args := []string{
-		stringifyArgument("--foreign-cluster-id", remoteClusterID),
+		stringifyArgument("--foreign-cluster-id", remoteCluster.ClusterID),
+		stringifyArgument("--foreign-cluster-name", remoteCluster.ClusterName),
 		stringifyArgument("--nodename", nodeName),
-		stringifyArgument("--kubelet-namespace", vkNamespace),
-		stringifyArgument("--home-cluster-id", homeClusterID),
-		stringifyArgument("--ipam-server", fmt.Sprintf("%v.%v", liqoconst.NetworkManagerServiceName, liqoNamespace)),
-		"--klog.v=4",
+		stringifyArgument("--tenant-namespace", vkNamespace),
+		stringifyArgument("--home-cluster-id", homeCluster.ClusterID),
+		stringifyArgument("--home-cluster-name", homeCluster.ClusterName),
+		stringifyArgument("--ipam-server",
+			fmt.Sprintf("%v.%v:%v", liqoconst.NetworkManagerServiceName, liqoNamespace, liqoconst.NetworkManagerIpamPort)),
+	}
+
+	if len(resourceOffer.Spec.StorageClasses) > 0 {
+		args = append(args, "--enable-storage",
+			stringifyArgument("--remote-real-storage-class-name",
+				getDeafultStorageClass(resourceOffer.Spec.StorageClasses).StorageClassName))
 	}
 
 	if extraAnnotations := opts.NodeExtraAnnotations.StringMap; len(extraAnnotations) != 0 {
@@ -154,13 +174,14 @@ func forgeVKContainers(
 }
 
 func forgeVKPodSpec(
-	vkName, vkNamespace, liqoNamespace, homeClusterID string,
-	remoteClusterID, nodeName string, opts *VirtualKubeletOpts) v1.PodSpec {
+	vkName, vkNamespace, liqoNamespace string,
+	homeCluster, remoteCluster discoveryv1alpha1.ClusterIdentity, nodeName string, opts *VirtualKubeletOpts,
+	resourceOffer *sharingv1alpha1.ResourceOffer) v1.PodSpec {
 	return v1.PodSpec{
 		Volumes:        forgeVKVolumes(),
 		InitContainers: forgeVKInitContainers(nodeName, opts),
-		Containers: forgeVKContainers(opts.ContainerImage, remoteClusterID,
-			nodeName, vkNamespace, liqoNamespace, homeClusterID, opts),
+		Containers: forgeVKContainers(opts.ContainerImage, homeCluster, remoteCluster,
+			nodeName, vkNamespace, liqoNamespace, opts, resourceOffer),
 		ServiceAccountName: vkName,
 		Affinity:           forgeVKAffinity(),
 	}

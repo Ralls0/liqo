@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,10 +19,29 @@ import (
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
+	"k8s.io/client-go/kubernetes"
+	"sigs.k8s.io/controller-runtime/pkg/envtest"
+)
+
+var (
+	testEnv       envtest.Environment
+	testEnvClient kubernetes.Interface
 )
 
 func TestStorageProvisioner(t *testing.T) {
-	defer GinkgoRecover()
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Test Storage Provisioner")
 }
+
+var _ = BeforeSuite(func() {
+	testEnv = envtest.Environment{}
+	cfg, err := testEnv.Start()
+	Expect(err).ToNot(HaveOccurred())
+
+	// Need to use a real client, as server side apply seems not to be currently supported by the fake one.
+	testEnvClient = kubernetes.NewForConfigOrDie(cfg)
+})
+
+var _ = AfterSuite(func() {
+	Expect(testEnv.Stop()).To(Succeed())
+})

@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -30,23 +30,27 @@ var (
 	TunnelEndpointGroupResource = schema.GroupResource{Group: GroupVersion.Group,
 		Resource: "tunnelendpoints"}
 
-	// TunnelEndpointGroupVersionResource is group resource version used to tunnelEndpoint objects.
+	// TunnelEndpointGroupVersionResource is group version resource used by dynamic client.
 	TunnelEndpointGroupVersionResource = schema.GroupVersionResource{Group: GroupVersion.Group,
 		Version:  GroupVersion.Version,
 		Resource: "tunnelendpoints"}
 
-	// NetworkConfigGroupResource is group resource used to register network configs.
+	// NetworkConfigGroupResource is group resource used to register networkconfigs.
 	NetworkConfigGroupResource = schema.GroupResource{Group: GroupVersion.Group,
-		Resource: "networkconfigs"}
+		Resource: ResourceNetworkConfigs}
 
-	// NetworkConfigGroupVersionResource is group resource version used to networkConfig objects.
+	// NetworkConfigGroupVersionResource is group version resource used by dynamic client.
 	NetworkConfigGroupVersionResource = schema.GroupVersionResource{Group: GroupVersion.Group,
 		Version:  GroupVersion.Version,
-		Resource: "networkconfigs"}
+		Resource: ResourceNetworkConfigs}
 
 	// IpamGroupResource is group resource used to register ipamstorages.
-	IpamGroupResource = schema.GroupVersionResource{Group: GroupVersion.Group, Version: GroupVersion.Version,
-		Resource: "ipamstorages"}
+	IpamGroupResource = schema.GroupResource{Group: GroupVersion.Group,
+		Resource: ResourceIpamStorages}
+
+	// IpamGroupVersionResource is group version resource used by dynamic client.
+	IpamGroupVersionResource = schema.GroupVersionResource{Group: GroupVersion.Group, Version: GroupVersion.Version,
+		Resource: ResourceIpamStorages}
 
 	// NatMappingGroupResource is group resource used to register natmappings.
 	NatMappingGroupResource = schema.GroupVersionResource{Group: GroupVersion.Group, Version: GroupVersion.Version,

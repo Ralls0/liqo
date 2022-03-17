@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -66,6 +66,7 @@ type TunnelEndpointStatus struct {
 	TunnelIFaceName  string     `json:"tunnelIFaceName,omitempty"`
 	VethIFaceIndex   int        `json:"vethIFaceIndex,omitempty"`
 	VethIFaceName    string     `json:"vethIFaceName,omitempty"`
+	VethIP           string     `json:"vethIP,omitempty"`
 	GatewayIP        string     `json:"gatewayIP,omitempty"`
 	Connection       Connection `json:"connection,omitempty"`
 }

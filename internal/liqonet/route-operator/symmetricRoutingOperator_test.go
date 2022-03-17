@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -294,30 +294,6 @@ var _ = Describe("SymmetricRoutingOperator", func() {
 				routes, err := netlink.RouteListFiltered(netlink.FAMILY_V4, srcRoute, netlink.RT_FILTER_TABLE|netlink.RT_FILTER_DST)
 				Expect(err).Should(BeNil())
 				Expect(len(routes)).Should(BeNumerically("==", 0))
-			})
-		})
-	})
-
-	Describe("testing podFilter function", func() {
-		Context("when object is not a pod", func() {
-			It("should return false", func() {
-				// Create a service object
-				s := corev1.Service{}
-				ok := src.podFilter(&s)
-				Expect(ok).Should(BeFalse())
-			})
-		})
-
-		Context("when pod is running on different node than operator", func() {
-			It("podIP is not set, should return false", func() {
-				ok := src.podFilter(srcTestPod)
-				Expect(ok).Should(BeFalse())
-			})
-
-			It("podIP is set, should return true", func() {
-				srcTestPod.Status.PodIP = srcPodIP
-				ok := src.podFilter(srcTestPod)
-				Expect(ok).Should(BeTrue())
 			})
 		})
 	})

@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -173,7 +173,17 @@ func (p *LiqoNodeProvider) updateFromResourceOffer(resourceOffer *sharingv1alpha
 	p.updateMutex.Lock()
 	defer p.updateMutex.Unlock()
 
-	if err := p.patchLabels(resourceOffer.Spec.Labels); err != nil {
+	lbls := resourceOffer.Spec.Labels
+	if lbls == nil {
+		lbls = map[string]string{}
+	}
+	if len(resourceOffer.Spec.StorageClasses) == 0 {
+		lbls[consts.StorageAvailableLabel] = "false"
+	} else {
+		lbls[consts.StorageAvailableLabel] = "true"
+	}
+
+	if err := p.patchLabels(lbls); err != nil {
 		klog.Error(err)
 		return err
 	}
@@ -234,12 +244,8 @@ func (p *LiqoNodeProvider) handleResourceOfferDelete(resourceOffer *sharingv1alp
 		return err
 	}
 
-	if isChanOpen(p.podProviderStopper) {
-		close(p.podProviderStopper)
-	}
-
 	// delete the node
-	if err := client.IgnoreNotFound(p.client.CoreV1().Nodes().Delete(ctx, p.node.GetName(), metav1.DeleteOptions{})); err != nil {
+	if err := client.IgnoreNotFound(p.localClient.CoreV1().Nodes().Delete(ctx, p.node.GetName(), metav1.DeleteOptions{})); err != nil {
 		klog.Errorf("error deleting node: %v", err)
 		return err
 	}
@@ -276,15 +282,6 @@ func (p *LiqoNodeProvider) patchLabels(labels map[string]string) error {
 
 	p.lastAppliedLabels = labels
 	return nil
-}
-
-func isChanOpen(ch chan struct{}) bool {
-	open := true
-	select {
-	case _, open = <-ch:
-	default:
-	}
-	return open
 }
 
 // areResourcesReady returns true if both cpu and memory are more than zero.

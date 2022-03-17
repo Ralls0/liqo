@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -32,13 +32,14 @@ import (
 	k8shelper "k8s.io/component-helpers/scheduling/corev1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	discoveryv1alpha1 "github.com/liqotech/liqo/apis/discovery/v1alpha1"
 	offloadingv1alpha1 "github.com/liqotech/liqo/apis/offloading/v1alpha1"
 	sharingv1alpha1 "github.com/liqotech/liqo/apis/sharing/v1alpha1"
 	liqoconst "github.com/liqotech/liqo/pkg/consts"
 	"github.com/liqotech/liqo/pkg/liqoctl/common"
 	"github.com/liqotech/liqo/pkg/liqoctl/generate"
 	argsutils "github.com/liqotech/liqo/pkg/utils/args"
-	liqoutils "github.com/liqotech/liqo/pkg/utils/foreignCluster"
+	foreignclusterutils "github.com/liqotech/liqo/pkg/utils/foreignCluster"
 	"github.com/liqotech/liqo/test/e2e/testutils/tester"
 	"github.com/liqotech/liqo/test/e2e/testutils/util"
 )
@@ -120,14 +121,14 @@ var _ = Describe("Liqo E2E", func() {
 					By("Getting the local tenant namespace corresponding to the right cluster and getting the " +
 						"ResourceOffer sent by the cluster under examination")
 					Eventually(func() error {
-						tenantNamespaceName, err := liqoutils.GetLocalTenantNamespaceName(ctx,
-							cluster.ControllerClient, testContext.Clusters[i].ClusterID)
+						tenantNamespaceName, err := foreignclusterutils.GetLocalTenantNamespaceName(ctx,
+							cluster.ControllerClient, testContext.Clusters[i].Cluster)
 						if err != nil {
 							return err
 						}
 						return cluster.ControllerClient.Get(ctx, types.NamespacedName{
 							Namespace: tenantNamespaceName,
-							Name:      fmt.Sprintf("%s-%s", resourceOfferNamePrefix, cluster.ClusterID),
+							Name:      fmt.Sprintf("%s-%s", resourceOfferNamePrefix, cluster.Cluster.ClusterName),
 						}, resourceOffer)
 					}, timeout, interval).Should(BeNil())
 					for key, value := range clusterLabels {
@@ -144,7 +145,7 @@ var _ = Describe("Liqo E2E", func() {
 			func(cluster tester.ClusterContext, index int, clusterLabels map[string]string) {
 				virtualNode := &corev1.Node{}
 				liqoPrefix := "liqo"
-				virtualNodeName := fmt.Sprintf("%s-%s", liqoPrefix, cluster.ClusterID)
+				virtualNodeName := fmt.Sprintf("%s-%s", liqoPrefix, cluster.Cluster.ClusterName)
 				for i := range testContext.Clusters {
 					if i == index {
 						continue
@@ -172,7 +173,7 @@ var _ = Describe("Liqo E2E", func() {
 			By(" 1 - Creating the local namespace without the NamespaceOffloading resource")
 			Eventually(func() error {
 				_, err := util.EnforceNamespace(ctx, testContext.Clusters[localIndex].NativeClient,
-					testContext.Clusters[localIndex].ClusterID,
+					testContext.Clusters[localIndex].Cluster,
 					testNamespaceName, util.GetNamespaceLabel(false))
 				return err
 			}, timeout, interval).Should(BeNil())
@@ -200,10 +201,12 @@ var _ = Describe("Liqo E2E", func() {
 				remoteClusterID := virtualNodesList.Items[i].Labels[liqoconst.RemoteClusterID]
 
 				var cl kubernetes.Interface
+				var identity discoveryv1alpha1.ClusterIdentity
 				for j := range testContext.Clusters {
 					cluster := &testContext.Clusters[j]
-					if cluster.ClusterID == remoteClusterID {
+					if cluster.Cluster.ClusterID == remoteClusterID {
 						cl = cluster.NativeClient
+						identity = cluster.Cluster
 						break
 					}
 				}
@@ -219,9 +222,9 @@ var _ = Describe("Liqo E2E", func() {
 						return err
 					}, timeout, interval).Should(BeNil())
 
-					value, ok := namespace.Annotations[liqoconst.RemoteNamespaceAnnotationKey]
+					value, ok := namespace.Annotations[liqoconst.RemoteNamespaceManagedByAnnotationKey]
 					Expect(ok).To(BeTrue())
-					Expect(value).To(Equal(testContext.Clusters[localIndex].ClusterID))
+					Expect(value).To(HaveSuffix(foreignclusterutils.UniqueName(&identity)))
 				} else {
 					// Check if the remote namespace does not exists.
 					By(fmt.Sprintf(" 5 - Checking that no remote namespace is created inside cluster '%s'", remoteClusterID))

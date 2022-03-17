@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -38,6 +38,8 @@ import (
 	"github.com/liqotech/liqo/pkg/utils/syncset"
 	traceutils "github.com/liqotech/liqo/pkg/utils/trace"
 )
+
+const componentName = "netcfgCreator"
 
 // NetworkConfigCreator reconciles ForeignCluster objects to enforce the respective NetworkConfigs.
 type NetworkConfigCreator struct {
@@ -90,15 +92,20 @@ func (ncc *NetworkConfigCreator) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, nil
 	}
 
+	if !foreigncluster.IsNetworkingEnabled(&fc) {
+		klog.V(4).Infof("Networking for cluster %q is disabled, hence no need to create the networkconfig", req.Name)
+	}
+
 	// Add the ForeignCluster to the list of known ones.
 	ncc.foreignClusters.Add(req.NamespacedName.Name)
 
-	// A peering is (being) established, hence we need to ensure the network interconnection.
-	if fc.GetDeletionTimestamp().IsZero() && (foreigncluster.IsIncomingJoined(&fc) || foreigncluster.IsOutgoingJoined(&fc)) {
+	// A peering is (being) established and networking is enabled, hence we need to ensure the network interconnection.
+	if fc.GetDeletionTimestamp().IsZero() && foreigncluster.IsNetworkingEnabled(&fc) &&
+		(foreigncluster.IsIncomingJoined(&fc) || foreigncluster.IsOutgoingJoined(&fc)) {
 		return ctrl.Result{}, ncc.EnforceNetworkConfigPresence(ctx, &fc)
 	}
 
-	// A peering is not established, hence we need to tear down the network interconnection.
+	// A peering is not established or the networking has been disabled, hence we need to tear down the network interconnection.
 	return ctrl.Result{}, ncc.EnforceNetworkConfigAbsence(ctx, &fc)
 }
 

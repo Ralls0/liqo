@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,7 +17,6 @@ package tenantnamespace
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	v1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
@@ -30,7 +29,9 @@ import (
 	corev1listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/klog/v2"
 
+	discoveryv1alpha1 "github.com/liqotech/liqo/apis/discovery/v1alpha1"
 	"github.com/liqotech/liqo/pkg/discovery"
+	foreignclusterutils "github.com/liqotech/liqo/pkg/utils/foreignCluster"
 )
 
 type tenantNamespaceManager struct {
@@ -65,9 +66,9 @@ func NewTenantNamespaceManager(client kubernetes.Interface) Manager {
 
 // CreateNamespace creates a new Tenant Namespace given the clusterid
 // This method is idempotent, multiple calls of it will not lead to multiple namespace creations.
-func (nm *tenantNamespaceManager) CreateNamespace(clusterID string) (ns *v1.Namespace, err error) {
+func (nm *tenantNamespaceManager) CreateNamespace(cluster discoveryv1alpha1.ClusterIdentity) (ns *v1.Namespace, err error) {
 	// Let immediately check if the namespace already exists, since this is operation cached and thus fast
-	if ns, err = nm.GetNamespace(clusterID); err == nil {
+	if ns, err = nm.GetNamespace(cluster); err == nil {
 		return ns, nil
 	} else if !kerrors.IsNotFound(err) {
 		klog.Error(err)
@@ -79,9 +80,9 @@ func (nm *tenantNamespaceManager) CreateNamespace(clusterID string) (ns *v1.Name
 	// exit with an error, and retry during the next iteration.
 	ns = &v1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: strings.Join([]string{tenantNamespaceRoot, clusterID}, "-"),
+			Name: GetNameForNamespace(cluster),
 			Labels: map[string]string{
-				discovery.ClusterIDLabel:       clusterID,
+				discovery.ClusterIDLabel:       cluster.ClusterID,
 				discovery.TenantNamespaceLabel: "true",
 			},
 		},
@@ -93,13 +94,13 @@ func (nm *tenantNamespaceManager) CreateNamespace(clusterID string) (ns *v1.Name
 		return nil, err
 	}
 
-	klog.V(4).Infof("Namespace %v created for the remote cluster %v", ns.Name, clusterID)
+	klog.V(4).Infof("Namespace %v created for the remote cluster %v", ns.Name, cluster.ClusterName)
 	return ns, nil
 }
 
 // GetNamespace gets a Tenant Namespace given the clusterid.
-func (nm *tenantNamespaceManager) GetNamespace(clusterID string) (*v1.Namespace, error) {
-	req, err := labels.NewRequirement(discovery.ClusterIDLabel, selection.Equals, []string{clusterID})
+func (nm *tenantNamespaceManager) GetNamespace(cluster discoveryv1alpha1.ClusterIdentity) (*v1.Namespace, error) {
+	req, err := labels.NewRequirement(discovery.ClusterIDLabel, selection.Equals, []string{cluster.ClusterID})
 	utilruntime.Must(err)
 
 	namespaces, err := nm.namespaceLister.List(labels.NewSelector().Add(*req))
@@ -109,14 +110,19 @@ func (nm *tenantNamespaceManager) GetNamespace(clusterID string) (*v1.Namespace,
 	}
 
 	if nItems := len(namespaces); nItems == 0 {
-		err = kerrors.NewNotFound(v1.Resource("Namespace"), strings.Join([]string{tenantNamespaceRoot, clusterID}, "-"))
+		err = kerrors.NewNotFound(v1.Resource("Namespace"), GetNameForNamespace(cluster))
 		// do not log it always, since it is also used in the preliminary stage of the create method
 		klog.V(4).Info(err)
 		return nil, err
 	} else if nItems > 1 {
-		err = fmt.Errorf("multiple tenant namespaces found for clusterid %v", clusterID)
+		err = fmt.Errorf("multiple tenant namespaces found for clusterid %v", cluster.ClusterName)
 		klog.Error(err)
 		return nil, err
 	}
 	return namespaces[0].DeepCopy(), nil
+}
+
+// GetNameForNamespace given a cluster identity it returns the name of the tenant namespace for the cluster.
+func GetNameForNamespace(cluster discoveryv1alpha1.ClusterIdentity) string {
+	return fmt.Sprintf("liqo-tenant-%s", foreignclusterutils.UniqueName(&cluster))
 }

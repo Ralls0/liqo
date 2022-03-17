@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -89,12 +89,12 @@ func processAddCluster(ctx context.Context, t *ClusterArgs, clientSet kubernetes
 		return err
 	}
 
-	clusterID, err := utils.GetClusterIDWithControllerClient(ctx, k8sClient, t.Namespace)
+	clusterIdentity, err := utils.GetClusterIdentityWithControllerClient(ctx, k8sClient, t.Namespace)
 	if err != nil {
 		return err
 	}
 	// Check clusterIDs are not equal. If they are, abort.
-	if clusterID == t.ClusterID {
+	if clusterIdentity.ClusterID == t.ClusterID {
 		return fmt.Errorf(sameClusterError)
 	}
 

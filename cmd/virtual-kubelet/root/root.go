@@ -18,8 +18,6 @@ package root
 import (
 	"context"
 	"os"
-	"path"
-	"time"
 
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
@@ -27,22 +25,18 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/client-go/discovery"
-	kubeinformers "k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
 
 	"github.com/liqotech/liqo/internal/utils/errdefs"
+	identitymanager "github.com/liqotech/liqo/pkg/identityManager"
+	tenantnamespace "github.com/liqotech/liqo/pkg/tenantNamespace"
 	"github.com/liqotech/liqo/pkg/utils"
 	"github.com/liqotech/liqo/pkg/utils/restcfg"
-	"github.com/liqotech/liqo/pkg/virtualKubelet"
 	nodeprovider "github.com/liqotech/liqo/pkg/virtualKubelet/liqoNodeProvider"
-	"github.com/liqotech/liqo/pkg/virtualKubelet/manager"
 	podprovider "github.com/liqotech/liqo/pkg/virtualKubelet/provider"
 )
 
@@ -63,89 +57,85 @@ func NewCommand(ctx context.Context, name string, c *Opts) *cobra.Command {
 }
 
 func runRootCommand(ctx context.Context, c *Opts) error {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	if c.ForeignClusterID == "" {
+	if c.ForeignCluster.ClusterID == "" {
 		return errors.New("cluster id is mandatory")
 	}
-
-	if c.PodSyncWorkers == 0 {
-		return errdefs.InvalidInput("pod sync workers must be greater than 0")
+	if c.ForeignCluster.ClusterName == "" {
+		return errors.New("cluster name is mandatory")
 	}
 
-	config, err := utils.GetRestConfig(c.HomeKubeconfig)
+	if c.PodWorkers == 0 || c.ServiceWorkers == 0 || c.EndpointSliceWorkers == 0 || c.ConfigMapWorkers == 0 || c.SecretWorkers == 0 {
+		return errdefs.InvalidInput("reflection workers must be greater than 0")
+	}
+
+	localConfig, err := utils.GetRestConfig(c.HomeKubeconfig)
 	if err != nil {
 		return err
 	}
 
-	restcfg.SetRateLimiterWithCustomParamenters(config, virtualKubelet.HOME_CLIENT_QPS, virtualKubelet.HOME_CLIENTS_BURST)
-	client, err := kubernetes.NewForConfig(config)
+	restcfg.SetRateLimiter(localConfig)
+	localClient := kubernetes.NewForConfigOrDie(localConfig)
+
+	// Retrieve the remote restcfg
+	tenantNamespaceManager := tenantnamespace.NewTenantNamespaceManager(localClient)
+	identityManager := identitymanager.NewCertificateIdentityReader(localClient, c.HomeCluster, tenantNamespaceManager)
+
+	remoteConfig, err := identityManager.GetConfig(c.ForeignCluster, c.TenantNamespace)
 	if err != nil {
 		return err
 	}
 
-	// Create a shared informer factory for Kubernetes pods in the current namespace (if specified) and scheduled to the current node.
-	podInformerFactory := kubeinformers.NewSharedInformerFactoryWithOptions(
-		client,
-		c.InformerResyncPeriod,
-		kubeinformers.WithTweakListOptions(func(options *metav1.ListOptions) {
-			options.FieldSelector = fields.OneTermEqualSelector("spec.nodeName", c.NodeName).String()
-		}))
-	podInformer := podInformerFactory.Core().V1().Pods()
-
-	// Create another shared informer factory for Kubernetes secrets and configmaps (not subject to any selectors).
-	scmInformerFactory := kubeinformers.NewSharedInformerFactoryWithOptions(client, c.InformerResyncPeriod)
-	// Create a secret informer and a config map informer so we can pass their listers to the resource manager.
-	secretInformer := scmInformerFactory.Core().V1().Secrets()
-	configMapInformer := scmInformerFactory.Core().V1().ConfigMaps()
-	serviceInformer := scmInformerFactory.Core().V1().Services()
-
-	rm, err := manager.NewResourceManager(podInformer.Lister(), secretInformer.Lister(), configMapInformer.Lister(), serviceInformer.Lister())
-	if err != nil {
-		return errors.Wrap(err, "could not create resource manager")
-	}
+	restcfg.SetRateLimiter(remoteConfig)
 
 	// Initialize the pod provider
 	podcfg := podprovider.InitConfig{
-		HomeConfig:      config,
-		HomeClusterID:   c.HomeClusterID,
-		RemoteClusterID: c.ForeignClusterID,
+		HomeConfig:    localConfig,
+		RemoteConfig:  remoteConfig,
+		HomeCluster:   c.HomeCluster,
+		RemoteCluster: c.ForeignCluster,
 
-		Namespace: c.KubeletNamespace,
+		Namespace: c.TenantNamespace,
 		NodeName:  c.NodeName,
+		NodeIP:    os.Getenv("VKUBELET_POD_IP"),
 
 		LiqoIpamServer:       c.LiqoIpamServer,
 		InformerResyncPeriod: c.InformerResyncPeriod,
 
-		ServiceWorkers:       c.ServiceWorkers,
-		EndpointSliceWorkers: c.EndpointSliceWorkers,
+		PodWorkers:                  c.PodWorkers,
+		ServiceWorkers:              c.ServiceWorkers,
+		EndpointSliceWorkers:        c.EndpointSliceWorkers,
+		ConfigMapWorkers:            c.ConfigMapWorkers,
+		SecretWorkers:               c.SecretWorkers,
+		PersistenVolumeClaimWorkers: c.PersistenVolumeClaimWorkers,
+
+		EnableStorage:              c.EnableStorage,
+		VirtualStorageClassName:    c.VirtualStorageClassName,
+		RemoteRealStorageClassName: c.RemoteRealStorageClassName,
 	}
 
-	podProvider, err := podprovider.NewLiqoProvider(ctx, &podcfg)
+	eb := record.NewBroadcaster()
+	podProvider, err := podprovider.NewLiqoProvider(ctx, &podcfg, eb)
 	if err != nil {
 		return err
 	}
 
-	podProviderStopper := make(chan struct{})
-	podProvider.SetProviderStopper(podProviderStopper)
-
 	// Initialize the node provider
 	nodecfg := nodeprovider.InitConfig{
-		HomeConfig:      config,
-		HomeClusterID:   c.HomeClusterID,
-		RemoteClusterID: c.ForeignClusterID,
-		Namespace:       c.KubeletNamespace,
+		HomeConfig:      localConfig,
+		RemoteConfig:    remoteConfig,
+		HomeClusterID:   c.HomeCluster.ClusterID,
+		RemoteClusterID: c.ForeignCluster.ClusterID,
+		Namespace:       c.TenantNamespace,
 
 		NodeName:         c.NodeName,
 		InternalIP:       os.Getenv("VKUBELET_POD_IP"),
 		DaemonPort:       c.ListenPort,
-		Version:          getVersion(config),
+		Version:          getVersion(localConfig),
 		ExtraLabels:      c.NodeExtraLabels.StringMap,
 		ExtraAnnotations: c.NodeExtraAnnotations.StringMap,
 
-		PodProviderStopper:   podProviderStopper,
-		InformerResyncPeriod: c.LiqoInformerResyncPeriod,
+		InformerResyncPeriod: c.InformerResyncPeriod,
+		PingDisabled:         c.NodePingInterval == 0,
 	}
 
 	nodeProvider := nodeprovider.NewLiqoNodeProvider(&nodecfg)
@@ -153,8 +143,9 @@ func runRootCommand(ctx context.Context, c *Opts) error {
 
 	nodeRunner, err := node.NewNodeController(
 		nodeProvider, nodeProvider.GetNode(),
-		client.CoreV1().Nodes(),
-		node.WithNodeEnableLeaseV1(client.CoordinationV1().Leases(corev1.NamespaceNodeLease), node.DefaultLeaseDuration),
+		localClient.CoreV1().Nodes(),
+		node.WithNodeEnableLeaseV1(localClient.CoordinationV1().Leases(corev1.NamespaceNodeLease), int32(c.NodeLeaseDuration.Seconds())),
+		node.WithNodePingInterval(c.NodePingInterval), node.WithNodePingTimeout(c.NodePingTimeout),
 		node.WithNodeStatusUpdateErrorHandler(
 			func(ctx context.Context, err error) error {
 				klog.Info("node setting up")
@@ -167,17 +158,17 @@ func runRootCommand(ctx context.Context, c *Opts) error {
 					return nil
 				}
 
-				oldNode, newErr := client.CoreV1().Nodes().Get(ctx, newNode.Name, metav1.GetOptions{})
+				oldNode, newErr := localClient.CoreV1().Nodes().Get(ctx, newNode.Name, metav1.GetOptions{})
 				if newErr != nil {
 					if !k8serrors.IsNotFound(newErr) {
 						klog.Error(newErr, "node error")
 						return newErr
 					}
-					_, newErr = client.CoreV1().Nodes().Create(ctx, newNode, metav1.CreateOptions{})
+					_, newErr = localClient.CoreV1().Nodes().Create(ctx, newNode, metav1.CreateOptions{})
 					klog.Info("new node created")
 				} else {
 					oldNode.Status = newNode.Status
-					_, newErr = client.CoreV1().Nodes().UpdateStatus(ctx, oldNode, metav1.UpdateOptions{})
+					_, newErr = localClient.CoreV1().Nodes().UpdateStatus(ctx, oldNode, metav1.UpdateOptions{})
 					if newErr != nil {
 						klog.Info("node updated")
 					}
@@ -193,54 +184,12 @@ func runRootCommand(ctx context.Context, c *Opts) error {
 		return err
 	}
 
-	eb := record.NewBroadcaster()
-	pc, err := node.NewPodController(node.PodControllerConfig{
-		PodClient:                            client.CoreV1(),
-		PodInformer:                          podInformer,
-		EventRecorder:                        eb.NewRecorder(scheme.Scheme, corev1.EventSource{Component: path.Join(c.NodeName, "pod-controller")}),
-		Provider:                             podProvider,
-		SecretInformer:                       secretInformer,
-		ConfigMapInformer:                    configMapInformer,
-		ServiceInformer:                      serviceInformer,
-		SyncPodsFromKubernetesRateLimiter:    newPodControllerWorkqueueRateLimiter(),
-		SyncPodStatusFromProviderRateLimiter: newPodControllerWorkqueueRateLimiter(),
-		DeletePodsFromKubernetesRateLimiter:  newPodControllerWorkqueueRateLimiter(),
-	})
-	if err != nil {
-		return errors.Wrap(err, "error setting up pod controller")
-	}
-
-	go podInformerFactory.Start(ctx.Done())
-	go scmInformerFactory.Start(ctx.Done())
-
-	cancelHTTP, err := setupHTTPServer(ctx, podProvider, getAPIConfig(c), func(context.Context) ([]*corev1.Pod, error) {
-		return rm.GetPods(), nil
-	})
+	cancelHTTP, err := setupHTTPServer(ctx,
+		podProvider.PodHandler(), getAPIConfig(c), c.HomeCluster.ClusterID, remoteConfig)
 	if err != nil {
 		return errors.Wrap(err, "error while setting up HTTP server")
 	}
 	defer cancelHTTP()
-
-	go func() {
-		if err := pc.Run(ctx, int(c.PodSyncWorkers)); err != nil && errors.Is(err, context.Canceled) {
-			klog.Fatal(errors.Wrap(err, "error in pod controller running"))
-		}
-	}()
-
-	if c.StartupTimeout > 0 {
-		ctx, cancel := context.WithTimeout(ctx, c.StartupTimeout)
-		klog.Info("Waiting for pod controller / VK to be ready")
-		select {
-		case <-ctx.Done():
-			cancel()
-			return ctx.Err()
-		case <-pc.Ready():
-		}
-		cancel()
-		if err := pc.Err(); err != nil {
-			return err
-		}
-	}
 
 	go func() {
 		if err := nodeRunner.Run(ctx); err != nil {
@@ -255,14 +204,6 @@ func runRootCommand(ctx context.Context, c *Opts) error {
 	close(nodeReady)
 	<-ctx.Done()
 	return nil
-}
-
-// newPodControllerWorkqueueRateLimiter returns a new custom rate limiter to be assigned to the pod controller workqueues.
-// Differently from the standard workqueue.DefaultControllerRateLimiter(), composed of an overall bucket rate limiter
-// and a per-item exponential rate limiter to address failures, this includes only the latter component. Hance avoiding
-// performance limitations when processing a high number of pods in parallel.
-func newPodControllerWorkqueueRateLimiter() workqueue.RateLimiter {
-	return workqueue.NewItemExponentialFailureRateLimiter(5*time.Millisecond, 1000*time.Second)
 }
 
 func getVersion(config *rest.Config) string {

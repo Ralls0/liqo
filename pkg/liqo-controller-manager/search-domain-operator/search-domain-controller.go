@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@ package searchdomainoperator
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -35,8 +36,10 @@ type SearchDomainReconciler struct {
 
 	ResyncPeriod time.Duration
 
-	LocalClusterID string
-	DNSAddress     string
+	LocalCluster discoveryv1alpha1.ClusterIdentity
+	DNSAddress   string
+
+	InsecureTransport *http.Transport
 }
 
 // Reconcile reconciles SearchDomain resources.
@@ -64,7 +67,7 @@ func (r *SearchDomainReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			RequeueAfter: r.ResyncPeriod,
 		}, err
 	}
-	discovery.UpdateForeignWAN(ctx, r.Client, r.LocalClusterID, authData, &sd)
+	discovery.UpdateForeignWAN(ctx, r.InsecureTransport, r.Client, r.LocalCluster, authData, &sd)
 
 	klog.Info("SearchDomain " + req.Name + " successfully reconciled")
 	return ctrl.Result{

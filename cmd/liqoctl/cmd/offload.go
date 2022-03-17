@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,29 +25,38 @@ import (
 )
 
 func newOffloadCommand(ctx context.Context) *cobra.Command {
-	var offloadClusterCmd = &cobra.Command{
+	var offloadCommand = &cobra.Command{
 		Use:          offload.UseCommand,
 		SilenceUsage: true,
 		Short:        offload.LiqoctlOffloadShortHelp,
 		Long:         offload.LiqoctlOffloadLongHelp,
-		Args:         cobra.MinimumNArgs(2),
+	}
+	offloadCommand.AddCommand(newNamespaceCommand(ctx))
+	return offloadCommand
+}
+
+func newNamespaceCommand(ctx context.Context) *cobra.Command {
+	var offloadClusterCmd = &cobra.Command{
+		Use:          offload.ClusterResourceName,
+		SilenceUsage: true,
+		Short:        offload.LiqoctlOffloadShortHelp,
+		Long:         offload.LiqoctlOffloadLongHelp,
+		Args:         cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return offload.HandleOffloadCommand(ctx, cmd, args)
 		},
 	}
 	podOffloadingStrategy := args.NewEnum([]string{string(offloadingv1alpha1.LocalAndRemotePodOffloadingStrategyType),
 		string(offloadingv1alpha1.RemotePodOffloadingStrategyType),
-		string(offloadingv1alpha1.LocalPodOffloadingStrategyType)},
-		string(offloadingv1alpha1.LocalAndRemotePodOffloadingStrategyType))
+		string(offloadingv1alpha1.LocalPodOffloadingStrategyType)}, string(offloadingv1alpha1.LocalAndRemotePodOffloadingStrategyType))
 
-	offloadClusterCmd.PersistentFlags().Var(podOffloadingStrategy,
-		offload.PodOffloadingStrategyFlag, offload.PodOffloadingStrategyHelp)
+	offloadClusterCmd.PersistentFlags().Var(podOffloadingStrategy, offload.PodOffloadingStrategyFlag, offload.PodOffloadingStrategyHelp)
 	namespaceMappingStrategy := args.NewEnum([]string{string(offloadingv1alpha1.EnforceSameNameMappingStrategyType),
 		string(offloadingv1alpha1.DefaultNameMappingStrategyType)},
 		string(offloadingv1alpha1.DefaultNameMappingStrategyType))
 
-	offloadClusterCmd.PersistentFlags().Var(namespaceMappingStrategy, offload.NamespaceMappingStrategyFlag,
-		offload.NamespaceMappingStrategyHelp)
+	offloadClusterCmd.PersistentFlags().Var(namespaceMappingStrategy,
+		offload.NamespaceMappingStrategyFlag, offload.NamespaceMappingStrategyHelp)
 	offloadClusterCmd.PersistentFlags().String(offload.AcceptedLabelsFlag,
 		offload.AcceptedLabelsDefault, offload.AcceptedLabelsHelp)
 	offloadClusterCmd.PersistentFlags().String(offload.DeniedLabelsFlag,

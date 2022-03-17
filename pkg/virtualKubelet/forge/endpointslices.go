@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,8 +20,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	discoveryv1beta1apply "k8s.io/client-go/applyconfigurations/discovery/v1beta1"
-
-	"github.com/liqotech/liqo/pkg/virtualKubelet"
 )
 
 // EndpointSliceManagedBy -> The manager associated with the reflected EndpointSlices.
@@ -44,11 +42,11 @@ func IsEndpointSliceManagedByReflection(obj metav1.Object) bool {
 func EndpointToBeReflected(endpoint *discoveryv1beta1.Endpoint) bool {
 	// NodeName needs to be enabled through a feature gate in the v1beta1 API.
 	if endpoint.NodeName != nil {
-		return *endpoint.NodeName != LiqoNodeName()
+		return *endpoint.NodeName != LiqoNodeName
 	}
 
 	// The topology field is deprecated and will be removed when the v1beta1 API is removed (no sooner than kubernetes v1.24).
-	return endpoint.Topology[corev1.LabelHostname] != LiqoNodeName()
+	return endpoint.Topology[corev1.LabelHostname] != LiqoNodeName
 }
 
 // RemoteEndpointSlice forges the apply patch for the reflected endpointslice, given the local one.
@@ -66,7 +64,7 @@ func RemoteEndpointSlice(local *discoveryv1beta1.EndpointSlice, targetNamespace 
 func RemoteEndpointSliceEndpoints(locals []discoveryv1beta1.Endpoint,
 	translator EndpointTranslator) []*discoveryv1beta1apply.EndpointApplyConfiguration {
 	var remotes []*discoveryv1beta1apply.EndpointApplyConfiguration
-	nodename := virtualKubelet.VirtualNodeName(LocalClusterID)
+	hostname := LocalClusterID
 
 	for i := range locals {
 		if !EndpointToBeReflected(&locals[i]) {
@@ -79,7 +77,7 @@ func RemoteEndpointSliceEndpoints(locals []discoveryv1beta1.Endpoint,
 
 		remote := discoveryv1beta1apply.Endpoint().
 			WithAddresses(translator(local.Addresses)...).WithConditions(conditions).
-			WithTopology(local.Topology).WithTopology(map[string]string{corev1.LabelHostname: nodename}).
+			WithTopology(local.Topology).WithTopology(map[string]string{corev1.LabelHostname: hostname}).
 			WithTargetRef(RemoteObjectReference(local.TargetRef))
 		remote.Hostname = local.Hostname
 

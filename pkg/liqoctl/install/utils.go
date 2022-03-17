@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,10 +17,12 @@ package install
 import (
 	"context"
 	"fmt"
+	"os"
 
 	helm "github.com/mittwald/go-helm-client"
 	"gopkg.in/yaml.v3"
 	"helm.sh/helm/v3/pkg/action"
+	"helm.sh/helm/v3/pkg/downloader"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 
@@ -57,7 +59,7 @@ func getProviderInstance(providerType string) provider.InstallProviderInterface 
 	}
 }
 
-func initHelmClient(config *rest.Config, arguments *provider.CommonArguments) (*helm.HelmClient, error) {
+func initHelmClient(config *rest.Config, arguments *provider.CommonArguments) (helm.Client, error) {
 	helmClient, err := InitializeHelmClientWithRepo(config, arguments)
 	if err != nil {
 		fmt.Printf("Unable to create helmClient: %s", err)
@@ -66,7 +68,7 @@ func initHelmClient(config *rest.Config, arguments *provider.CommonArguments) (*
 	return helmClient, nil
 }
 
-func installOrUpdate(ctx context.Context, helmClient *helm.HelmClient, k provider.InstallProviderInterface, cArgs *provider.CommonArguments) error {
+func installOrUpdate(ctx context.Context, helmClient helm.Client, k provider.InstallProviderInterface, cArgs *provider.CommonArguments) error {
 	output, _, err := helmClient.GetChart(cArgs.ChartPath, &action.ChartPathOptions{Version: cArgs.Version})
 
 	if err != nil {
@@ -111,6 +113,11 @@ func installOrUpdate(ctx context.Context, helmClient *helm.HelmClient, k provide
 		errCh := make(chan error)
 		defer close(errCh)
 		go func() {
+			if err = dependencyUpdate(helmClient, &chartSpec); err != nil {
+				errCh <- err
+				return
+			}
+
 			_, err = helmClient.InstallOrUpgradeChart(ctx, &chartSpec)
 			errCh <- err
 		}()
@@ -128,13 +135,54 @@ func installOrUpdate(ctx context.Context, helmClient *helm.HelmClient, k provide
 }
 
 func generateValues(chartValues, commonValues, providerValues map[string]interface{}) (map[string]interface{}, error) {
-	intermediateValues, err := installutils.FusionMap(chartValues, commonValues)
+	intermediateValues, err := installutils.MergeMaps(chartValues, commonValues)
 	if err != nil {
 		return nil, err
 	}
-	finalValues, err := installutils.FusionMap(intermediateValues, providerValues)
+	finalValues, err := installutils.MergeMaps(intermediateValues, providerValues)
 	if err != nil {
 		return nil, err
 	}
 	return finalValues, nil
+}
+
+func dependencyUpdate(helmClient helm.Client, chartSpec *helm.ChartSpec) error {
+	cl, ok := helmClient.(*helm.HelmClient)
+	if !ok {
+		return fmt.Errorf("unable to cast helmClient to HelmClient")
+	}
+
+	client := action.NewInstall(cl.ActionConfig)
+
+	helmChart, chartPath, err := helmClient.GetChart(chartSpec.ChartName, &client.ChartPathOptions)
+	if err != nil {
+		return err
+	}
+
+	if helmChart.Metadata.Type != "" && helmChart.Metadata.Type != "application" {
+		return fmt.Errorf(
+			"chart %q has an unsupported type and is not installable: %q",
+			helmChart.Metadata.Name,
+			helmChart.Metadata.Type,
+		)
+	}
+
+	if req := helmChart.Metadata.Dependencies; req != nil {
+		if err := action.CheckDependencies(helmChart, req); err != nil {
+			man := &downloader.Manager{
+				Out:              os.Stdout,
+				ChartPath:        chartPath,
+				Keyring:          client.ChartPathOptions.Keyring,
+				SkipUpdate:       false,
+				Getters:          cl.Providers,
+				RepositoryConfig: cl.Settings.RepositoryConfig,
+				RepositoryCache:  cl.Settings.RepositoryCache,
+			}
+			if err := man.Update(); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }

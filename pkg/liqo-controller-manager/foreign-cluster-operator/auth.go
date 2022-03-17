@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,11 +17,10 @@ package foreignclusteroperator
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
@@ -50,7 +49,7 @@ const (
 // it creates a new identity and sends it to the remote cluster.
 func (r *ForeignClusterReconciler) ensureRemoteIdentity(ctx context.Context,
 	foreignCluster *discoveryv1alpha1.ForeignCluster) error {
-	_, err := r.IdentityManager.GetConfig(foreignCluster.Spec.ClusterIdentity.ClusterID, foreignCluster.Status.TenantNamespace.Local)
+	_, err := r.IdentityManager.GetConfig(foreignCluster.Spec.ClusterIdentity, foreignCluster.Status.TenantNamespace.Local)
 	if err != nil && !kerrors.IsNotFound(err) {
 		klog.Error(err)
 		return err
@@ -77,7 +76,7 @@ func (r *ForeignClusterReconciler) ensureRemoteIdentity(ctx context.Context,
 func (r *ForeignClusterReconciler) fetchRemoteTenantNamespace(ctx context.Context,
 	foreignCluster *discoveryv1alpha1.ForeignCluster) error {
 	remoteNamespace, err := r.IdentityManager.GetRemoteTenantNamespace(
-		foreignCluster.Spec.ClusterIdentity.ClusterID, foreignCluster.Status.TenantNamespace.Local)
+		foreignCluster.Spec.ClusterIdentity, foreignCluster.Status.TenantNamespace.Local)
 	if err != nil {
 		klog.Error(err)
 		return err
@@ -89,19 +88,19 @@ func (r *ForeignClusterReconciler) fetchRemoteTenantNamespace(ctx context.Contex
 
 // validateIdentity sends an HTTP request to validate the identity for the remote cluster (Certificate).
 func (r *ForeignClusterReconciler) validateIdentity(ctx context.Context, fc *discoveryv1alpha1.ForeignCluster) error {
-	remoteClusterID := fc.Spec.ClusterIdentity.ClusterID
-	token, err := authenticationtoken.GetAuthToken(ctx, fc.Spec.ClusterIdentity.ClusterID, r.Client)
+	remoteCluster := fc.Spec.ClusterIdentity
+	token, err := authenticationtoken.GetAuthToken(ctx, remoteCluster.ClusterID, r.Client)
 	if err != nil {
 		return err
 	}
 
-	_, err = r.IdentityManager.CreateIdentity(remoteClusterID)
+	_, err = r.IdentityManager.CreateIdentity(remoteCluster)
 	if err != nil {
 		klog.Error(err)
 		return err
 	}
 
-	csr, err := r.IdentityManager.GetSigningRequest(remoteClusterID)
+	csr, err := r.IdentityManager.GetSigningRequest(remoteCluster)
 	if err != nil {
 		klog.Error(err)
 		return err
@@ -113,8 +112,8 @@ func (r *ForeignClusterReconciler) validateIdentity(ctx context.Context, fc *dis
 		return err
 	}
 
-	request := auth.NewCertificateIdentityRequest(r.ClusterID, localToken, token, csr)
-	responseBytes, err := sendIdentityRequest(request, fc)
+	request := auth.NewCertificateIdentityRequest(r.HomeCluster, localToken, token, csr)
+	responseBytes, err := r.sendIdentityRequest(ctx, request, fc)
 	if err != nil {
 		klog.Error(err)
 		return err
@@ -126,7 +125,7 @@ func (r *ForeignClusterReconciler) validateIdentity(ctx context.Context, fc *dis
 		return err
 	}
 
-	if err = r.IdentityManager.StoreCertificate(remoteClusterID, &response); err != nil {
+	if err = r.IdentityManager.StoreCertificate(remoteCluster, fc.Spec.ForeignProxyURL, &response); err != nil {
 		klog.Error(err)
 		return err
 	}
@@ -135,7 +134,7 @@ func (r *ForeignClusterReconciler) validateIdentity(ctx context.Context, fc *dis
 }
 
 // sendIdentityRequest sends an HTTP request to the remote cluster.
-func sendIdentityRequest(request auth.IdentityRequest, fc *discoveryv1alpha1.ForeignCluster) (
+func (r *ForeignClusterReconciler) sendIdentityRequest(ctx context.Context, request auth.IdentityRequest, fc *discoveryv1alpha1.ForeignCluster) (
 	[]byte, error) {
 	jsonRequest, err := json.Marshal(request)
 	if err != nil {
@@ -144,16 +143,16 @@ func sendIdentityRequest(request auth.IdentityRequest, fc *discoveryv1alpha1.For
 	}
 	klog.V(8).Infof("[%v] Sending json request: %v", fc.Spec.ClusterIdentity.ClusterID, string(jsonRequest))
 
-	resp, err := sendRequest(
+	resp, err := sendRequest(ctx,
+		r.transport(foreignclusterutils.InsecureSkipTLSVerify(fc)),
 		fmt.Sprintf("%s%s", fc.Spec.ForeignAuthURL, request.GetPath()),
-		bytes.NewBuffer(jsonRequest),
-		foreignclusterutils.InsecureSkipTLSVerify(fc))
+		bytes.NewBuffer(jsonRequest))
 	if err != nil {
 		klog.Error(err)
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		klog.Error(err)
 		return nil, err
@@ -195,19 +194,25 @@ func sendIdentityRequest(request auth.IdentityRequest, fc *discoveryv1alpha1.For
 	}
 }
 
-func sendRequest(url string, payload *bytes.Buffer, insecureSkipTLSVerify bool) (*http.Response, error) {
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: insecureSkipTLSVerify},
-	}
+func sendRequest(ctx context.Context, transport *http.Transport, url string, payload *bytes.Buffer) (*http.Response, error) {
 	client := &http.Client{
-		Transport: tr,
+		Transport: transport,
 		Timeout:   utils.HTTPRequestTimeout,
 	}
-	req, err := http.NewRequestWithContext(context.TODO(), http.MethodPost, url, payload)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, payload)
 	if err != nil {
 		klog.Error(err)
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "text/plain")
 	return client.Do(req)
+}
+
+// transport returns the correct transport to be used for a given request.
+func (r *ForeignClusterReconciler) transport(insecureSkipTLSVerify bool) *http.Transport {
+	if insecureSkipTLSVerify {
+		return r.InsecureTransport
+	}
+
+	return r.SecureTransport
 }

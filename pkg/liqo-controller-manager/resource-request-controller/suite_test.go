@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,9 +21,10 @@ import (
 	"testing"
 	"time"
 
-	capsulev1beta1 "github.com/clastix/capsule/api/v1beta1"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
@@ -33,17 +34,18 @@ import (
 
 	discoveryv1alpha1 "github.com/liqotech/liqo/apis/discovery/v1alpha1"
 	sharingv1alpha1 "github.com/liqotech/liqo/apis/sharing/v1alpha1"
-	"github.com/liqotech/liqo/pkg/liqo-controller-manager/resource-request-controller/testutils"
 	liqoerrors "github.com/liqotech/liqo/pkg/utils/errors"
 )
 
 var (
 	cfg           *rest.Config
 	k8sClient     client.Client
-	homeClusterID string
+	homeCluster   discoveryv1alpha1.ClusterIdentity
 	clientset     kubernetes.Interface
 	testEnv       *envtest.Environment
-	broadcaster   Broadcaster
+	monitor       *LocalResourceMonitor
+	scaledMonitor *ResourceScaler
+	updater       *OfferUpdater
 	ctx           context.Context
 	cancel        context.CancelFunc
 	group         sync.WaitGroup
@@ -61,7 +63,6 @@ func createCluster() {
 	testEnv = &envtest.Environment{
 		CRDDirectoryPaths: []string{
 			filepath.Join("..", "..", "..", "deployments", "liqo", "crds"),
-			filepath.Join("..", "..", "..", "externalcrds"),
 		},
 	}
 
@@ -74,9 +75,6 @@ func createCluster() {
 	Expect(err).NotTo(HaveOccurred())
 	err = sharingv1alpha1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
-	err = capsulev1beta1.AddToScheme(scheme.Scheme)
-	Expect(err).NotTo(HaveOccurred())
-	// +kubebuilder:scaffold:scheme
 
 	By("Starting a new manager")
 	k8sManager, err := ctrl.NewManager(cfg, ctrl.Options{
@@ -87,23 +85,29 @@ func createCluster() {
 	// Disabling panic on failure.
 	liqoerrors.SetPanicOnErrorMode(false)
 	clientset = kubernetes.NewForConfigOrDie(k8sManager.GetConfig())
-	homeClusterID = "test-cluster"
+	homeCluster = discoveryv1alpha1.ClusterIdentity{
+		ClusterID:   "home-cluster-id",
+		ClusterName: "home-cluster-name",
+	}
 
-	// Initializing a new updater and adding it to the manager.
-	updater := OfferUpdater{}
-	updater.Setup(homeClusterID, k8sManager.GetScheme(), &broadcaster, k8sManager.GetClient(), nil)
-
-	// Initializing a new broadcaster, starting it and adding it its configuration.
-	err = broadcaster.SetupBroadcaster(clientset, &updater, 5*time.Second, testutils.DefaultScalePercentage, 5)
+	k8sClient, err = client.New(cfg, client.Options{Scheme: k8sManager.GetScheme()})
 	Expect(err).ToNot(HaveOccurred())
-	broadcaster.StartBroadcaster(ctx, &group)
+
+	// Initializing a new notifier and adding it to the manager.
+	localStorageClassName := ""
+	enableStorage := true
+	monitor = NewLocalMonitor(ctx, clientset, 5*time.Second)
+	scaledMonitor = &ResourceScaler{Provider: monitor, Factor: DefaultScaleFactor}
+	updater = NewOfferUpdater(k8sClient, homeCluster, nil, scaledMonitor, 5, localStorageClassName, enableStorage)
+
+	Expect(k8sManager.Add(updater)).To(Succeed())
 
 	// Adding ResourceRequest reconciler to the manager
 	err = (&ResourceRequestReconciler{
-		Client:                k8sManager.GetClient(),
+		Client:                k8sClient,
 		Scheme:                k8sManager.GetScheme(),
-		ClusterID:             homeClusterID,
-		Broadcaster:           &broadcaster,
+		HomeCluster:           homeCluster,
+		OfferUpdater:          updater,
 		EnableIncomingPeering: true,
 	}).SetupWithManager(k8sManager)
 	Expect(err).ToNot(HaveOccurred())
@@ -114,10 +118,7 @@ func createCluster() {
 		Expect(err).ToNot(HaveOccurred())
 	}()
 
-	k8sClient = k8sManager.GetClient()
-	Expect(k8sClient).ToNot(BeNil())
-
-	ctx = context.TODO()
+	Expect(k8sClient.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ResourcesNamespace2}})).To(Succeed())
 }
 
 func destroyCluster() {

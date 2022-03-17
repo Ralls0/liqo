@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -29,10 +29,7 @@ import (
 )
 
 var _ = Describe("Services Forging", func() {
-	BeforeEach(func() {
-		forge.LocalClusterID = LocalClusterID
-		forge.RemoteClusterID = RemoteClusterID
-	})
+	BeforeEach(func() { forge.Init(LocalClusterID, RemoteClusterID, LiqoNodeName, LiqoNodeIP) })
 
 	Describe("the RemoteService function", func() {
 		var (
@@ -101,7 +98,7 @@ var _ = Describe("Services Forging", func() {
 		}
 
 		DescribeTable("RemoteServiceSpec table", func(c remoteServiceTestcase) {
-			output := forge.RemoteServiceSpec(c.input.DeepCopy())
+			output := forge.RemoteServiceSpec(c.input.DeepCopy(), false)
 
 			By("should correctly replicate the core fields", func() {
 				Expect(output.Type).To(PointTo(c.expectedServiceType))
@@ -137,17 +134,19 @@ var _ = Describe("Services Forging", func() {
 
 	Describe("the RemoteServicePorts function", func() {
 		var (
-			input  corev1.ServicePort
-			output []*corev1apply.ServicePortApplyConfiguration
+			input               corev1.ServicePort
+			output              []*corev1apply.ServicePortApplyConfiguration
+			forceRemoteNodePort bool
 		)
 
 		BeforeEach(func() {
 			input = corev1.ServicePort{
 				Name: "HTTPS", Port: 443, TargetPort: intstr.FromInt(8443), Protocol: corev1.ProtocolTCP,
 			}
+			forceRemoteNodePort = false
 		})
 
-		JustBeforeEach(func() { output = forge.RemoteServicePorts([]corev1.ServicePort{input, input}) })
+		JustBeforeEach(func() { output = forge.RemoteServicePorts([]corev1.ServicePort{input, input}, forceRemoteNodePort) })
 
 		It("should return the correct number of ports", func() { Expect(output).To(HaveLen(2)) })
 		It("should correctly replicate the port fields", func() {
@@ -160,13 +159,23 @@ var _ = Describe("Services Forging", func() {
 		})
 
 		When("a node port is specified", func() {
-			BeforeEach(func() { input.NodePort = 33333 })
+			BeforeEach(func() {
+				input.NodePort = 33333
+			})
 			It("should be omitted", func() { Expect(output[0].NodePort).To(BeNil()) })
 		})
 
 		When("an app protocol is specified", func() {
 			BeforeEach(func() { input.AppProtocol = pointer.String("protocol") })
 			It("should be replicated", func() { Expect(output[0].AppProtocol).To(PointTo(Equal("protocol"))) })
+		})
+
+		When("force remote node port is specified", func() {
+			BeforeEach(func() {
+				input.NodePort = 33333
+				forceRemoteNodePort = true
+			})
+			It("should be replicated", func() { Expect(output[0].NodePort).To(PointTo(BeNumerically("==", 33333))) })
 		})
 	})
 })

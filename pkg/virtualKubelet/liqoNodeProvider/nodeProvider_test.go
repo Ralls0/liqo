@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -85,6 +85,7 @@ var _ = Describe("NodeProvider", func() {
 			Namespace: kubeletNamespace,
 
 			HomeConfig:      cluster.GetCfg(),
+			RemoteConfig:    cluster.GetCfg(), /* not actually used in tests */
 			RemoteClusterID: foreignClusterID,
 
 			PodProviderStopper: podStopper,
@@ -98,8 +99,7 @@ var _ = Describe("NodeProvider", func() {
 			client.CoreV1().Nodes().UpdateStatus(ctx, node, metav1.UpdateOptions{})
 		})
 
-		var ready chan struct{}
-		ready = nodeProvider.StartProvider(ctx)
+		ready := nodeProvider.StartProvider(ctx)
 		close(ready)
 	})
 
@@ -169,7 +169,7 @@ var _ = Describe("NodeProvider", func() {
 			}, timeout, interval).Should(ContainElements(c.expectedConditions))
 		},
 
-		Entry("update from Advertisement", nodeProviderTestcase{
+		Entry("update from ResourceOffer", nodeProviderTestcase{
 			resourceOffer: &sharingv1alpha1.ResourceOffer{
 				TypeMeta: metav1.TypeMeta{
 					Kind:       "ResourceOffer",

@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -29,7 +29,8 @@ import (
 	nettypes "github.com/liqotech/liqo/apis/net/v1alpha1"
 	advtypes "github.com/liqotech/liqo/apis/sharing/v1alpha1"
 	discovery "github.com/liqotech/liqo/pkg/discoverymanager"
-	"github.com/liqotech/liqo/pkg/mapperUtils"
+	"github.com/liqotech/liqo/pkg/utils/args"
+	"github.com/liqotech/liqo/pkg/utils/mapper"
 	"github.com/liqotech/liqo/pkg/utils/restcfg"
 )
 
@@ -48,8 +49,7 @@ func init() {
 func main() {
 	klog.Info("Starting")
 
-	clusterID := flag.String("cluster-id", "", "The cluster ID of identifying the current cluster")
-
+	clusterFlags := args.NewClusterIdentityFlags(true, nil)
 	namespace := flag.String("namespace", "default", "Namespace where your configs are stored.")
 	requeueAfter := flag.Duration("requeue-after", 30*time.Second,
 		"Period after that the PeeringRequests status is synchronized")
@@ -73,12 +73,14 @@ func main() {
 	klog.InitFlags(nil)
 	flag.Parse()
 
+	clusterIdentity := clusterFlags.ReadOrDie()
+
 	klog.Info("Namespace: ", *namespace)
 	klog.Info("RequeueAfter: ", *requeueAfter)
 
 	config := restcfg.SetRateLimiter(ctrl.GetConfigOrDie())
 	mgr, err := ctrl.NewManager(config, ctrl.Options{
-		MapperProvider:   mapperUtils.LiqoMapperProvider(scheme),
+		MapperProvider:   mapper.LiqoMapperProvider(scheme),
 		Scheme:           scheme,
 		LeaderElection:   false,
 		LeaderElectionID: "b3156c4e.liqo.io",
@@ -91,7 +93,7 @@ func main() {
 	// Create an accessory manager restricted to the given namespace only, to avoid introducing
 	// performance overhead and requiring excessively wide permissions when not necessary.
 	auxmgr, err := ctrl.NewManager(config, ctrl.Options{
-		MapperProvider:     mapperUtils.LiqoMapperProvider(scheme),
+		MapperProvider:     mapper.LiqoMapperProvider(scheme),
 		Scheme:             scheme,
 		Namespace:          *namespace,
 		MetricsBindAddress: "0", // Disable the metrics of the auxiliary manager to prevent conflicts.
@@ -105,7 +107,7 @@ func main() {
 
 	klog.Info("Starting the discovery logic")
 	discoveryCtl := discovery.NewDiscoveryCtrl(mgr.GetClient(), namespacedClient, *namespace,
-		*clusterID, mdnsConfig, *dialTCPTimeout)
+		clusterIdentity, mdnsConfig, *dialTCPTimeout)
 	if err := mgr.Add(discoveryCtl); err != nil {
 		klog.Errorf("Unable to add the discovery controller to the manager: %w", err)
 		os.Exit(1)

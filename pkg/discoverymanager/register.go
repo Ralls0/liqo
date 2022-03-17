@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -37,7 +37,7 @@ func (discovery *Controller) register(ctx context.Context) {
 
 	discovery.serverMux.Lock()
 	discovery.mdnsServerAuth, err = zeroconf.Register(
-		discovery.LocalClusterID,
+		discovery.LocalCluster.ClusterID,
 		discovery.mdnsConfig.Service,
 		discovery.mdnsConfig.Domain,
 		authPort, nil, discovery.getInterfaces(),

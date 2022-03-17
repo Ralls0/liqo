@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@ package apiserver
 import (
 	"encoding/base64"
 	"flag"
-	"io/ioutil"
+	"os"
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -78,7 +78,7 @@ func retrieveAPIServerCA(restcfg *rest.Config) (string, error) {
 	}
 	if restcfg.CAFile != "" {
 		// CAData is not available, read it from the CAFile.
-		data, err := ioutil.ReadFile(restcfg.CAFile)
+		data, err := os.ReadFile(restcfg.CAFile)
 		if err != nil {
 			return "", err
 		}

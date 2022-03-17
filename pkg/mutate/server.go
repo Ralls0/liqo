@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"time"
 
@@ -75,7 +75,7 @@ func NewMutationServer(ctx context.Context, c *MutationConfig) (*MutationServer,
 
 func (s *MutationServer) handleMutate(w http.ResponseWriter, r *http.Request) {
 	// read the body / request
-	body, err := ioutil.ReadAll(r.Body)
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		klog.Error(err)
 		standardErrMessage := fmt.Errorf("unable to correctly read the body of the request")

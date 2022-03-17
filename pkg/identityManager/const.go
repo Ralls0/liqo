@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -30,10 +30,12 @@ const (
 	identitySecretRoot      = "liqo-identity"
 	remoteCertificateSecret = "liqo-remote-certificate"
 
-	privateKeySecretKey   = "private-key"
-	csrSecretKey          = "csr"
-	certificateSecretKey  = "certificate"
-	apiServerURLSecretKey = "apiServerUrl"
+	privateKeySecretKey  = "private-key"
+	csrSecretKey         = "csr"
+	certificateSecretKey = "certificate"
+	// APIServerURLSecretKey key used for the api server url inside the secret.
+	APIServerURLSecretKey = "apiServerUrl"
+	apiProxyURLSecretKey  = "proxyURL"
 	apiServerCaSecretKey  = "apiServerCa"
 	namespaceSecretKey    = "namespace"
 

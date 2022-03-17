@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -41,7 +41,7 @@ func NewProvider() provider.InstallProviderInterface {
 
 // ValidateCommandArguments validates specific arguments passed to the install command.
 func (k *Kubeadm) ValidateCommandArguments(flags *flag.FlagSet) (err error) {
-	return k.ValidateGenericCommandArguments(flags)
+	return nil
 }
 
 // ExtractChartParameters fetches the parameters used to customize the Liqo installation on a specific cluster of a
@@ -79,6 +79,7 @@ func (k *Kubeadm) UpdateChartValues(values map[string]interface{}) {
 	values["discovery"] = map[string]interface{}{
 		"config": map[string]interface{}{
 			"clusterLabels": installutils.GetInterfaceMap(k.ClusterLabels),
+			"clusterName":   k.ClusterName,
 		},
 	}
 }

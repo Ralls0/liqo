@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,18 +24,6 @@ const (
 	// NatMappingKind is the constant representing
 	// the value of the Kind field of all NatMapping resources.
 	NatMappingKind = "NatMapping"
-	// NatMappingResourceLabelKey is the constant representing
-	// the key of the label assigned to all NatMapping resources.
-	NatMappingResourceLabelKey = "net.liqo.io/natmapping"
-	// NatMappingResourceLabelValue is the constant representing
-	// the value of the label assigned to all NatMapping resources.
-	NatMappingResourceLabelValue = "true"
-	// IpamStorageResourceLabelKey is the constant representing
-	// the key of the label assigned to all IpamStorage resources.
-	IpamStorageResourceLabelKey = "net.liqo.io/ipamstorage"
-	// IpamStorageResourceLabelValue is the constant representing
-	// the value of the label assigned to all IpamStorage resources.
-	IpamStorageResourceLabelValue = "true"
 	// RoutingTableID used to identify the custom routing table used
 	// to configure the routes on the k8s nodes by route operator.
 	RoutingTableID = 18952
@@ -58,13 +46,17 @@ const (
 	// HostVethName name of the veth device living in the host network namespace,
 	// on the node where liqo-gateway is running.
 	HostVethName = "liqo.host"
+	// HostVethIPAddr is used as next hop when configuring routes for traffic coming
+	// from the gateway namespace. A trick to prevent arp requests for the traffic going
+	// through the veth pair.
+	HostVethIPAddr = "169.254.100.2"
 	// GatewayVethName nome of the veth device living in the custom network namespace
 	// created by liqo-gateway.
 	GatewayVethName = "liqo.gateway"
-	// GatewayVethIPAddr ip address configured on gateway veth device. It is link local
-	// IP address. No traffic leaving the custom network namespace has as source IP this
-	// address.
-	GatewayVethIPAddr = "169.254.100.1/32"
+	// GatewayVethIPAddr is used as next hop when configuring routes for traffic coming
+	// from the host namespace. A trick to prevent arp requests for the traffic going
+	// through the veth pair.
+	GatewayVethIPAddr = "169.254.100.1"
 	// VxlanDeviceName name used for the vxlan devices created on each node by the instances
 	// of liqo-route.
 	VxlanDeviceName = "liqo.vxlan"
@@ -101,4 +93,12 @@ const (
 	DefaultMTU = 1440
 	// GatewayListeningPort port used by the vpn tunnel.
 	GatewayListeningPort = 5871
+
+	// **** Liqo Gateway Service ****.
+
+	// GatewayServiceAnnotationKey used to annotate the Gateway service with the IP of the node where the
+	// active gateway is running.
+	GatewayServiceAnnotationKey = "net.liqo.io/gatewayNodeIP"
+	// NetworkConfigNamePrefix prefix used to generate the names of the networkconfigs.
+	NetworkConfigNamePrefix = "net-config-"
 )

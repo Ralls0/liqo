@@ -22,13 +22,16 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path"
 	"time"
 
 	"github.com/pkg/errors"
 	"github.com/virtual-kubelet/virtual-kubelet/node/api"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 
-	podprovider "github.com/liqotech/liqo/pkg/virtualKubelet/provider"
+	"github.com/liqotech/liqo/pkg/virtualKubelet/reflection/workload"
 )
 
 // AcceptedCiphers is the list of accepted TLS ciphers, with known weak ciphers elided
@@ -59,8 +62,9 @@ func loadTLSConfig(certPath, keyPath string) (*tls.Config, error) {
 	}, nil
 }
 
-func setupHTTPServer(ctx context.Context, p *podprovider.LiqoProvider, cfg *apiServerConfig,
-	getPodsFromKubernetes api.PodListerFunc) (_ func(), retErr error) {
+func setupHTTPServer(ctx context.Context,
+	handler workload.PodHandler, cfg *apiServerConfig,
+	localClusterID string, remoteConfig *rest.Config) (_ func(), retErr error) {
 	var closers []io.Closer
 	cancel := func() {
 		for _, c := range closers {
@@ -76,7 +80,7 @@ func setupHTTPServer(ctx context.Context, p *podprovider.LiqoProvider, cfg *apiS
 	if cfg.CertPath == "" || cfg.KeyPath == "" {
 		klog.Error("TLS certificates not provided, not setting up pod http server")
 	} else {
-		s, err := startPodHandlerServer(ctx, p, cfg, getPodsFromKubernetes)
+		s, err := startPodHandlerServer(ctx, handler, cfg, localClusterID, remoteConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -85,32 +89,11 @@ func setupHTTPServer(ctx context.Context, p *podprovider.LiqoProvider, cfg *apiS
 		}
 	}
 
-	if cfg.MetricsAddr == "" {
-		klog.Info("Pod metrics server not setup due to empty metrics address")
-	} else {
-		l, err := net.Listen("tcp", cfg.MetricsAddr)
-		if err != nil {
-			return nil, errors.Wrap(err, "could not setup listener for pod metrics http server")
-		}
-
-		mux := http.NewServeMux()
-
-		podMetricsRoutes := api.PodMetricsConfig{
-			GetStatsSummary: p.GetStatsSummary,
-		}
-		api.AttachPodMetricsRoutes(podMetricsRoutes, mux)
-		s := &http.Server{
-			Handler: mux,
-		}
-		go serveHTTP(ctx, s, l, "pod metrics")
-		closers = append(closers, s)
-	}
-
 	return cancel, nil
 }
 
-func startPodHandlerServer(ctx context.Context, p *podprovider.LiqoProvider,
-	cfg *apiServerConfig, getPodsFromKubernetes api.PodListerFunc) (*http.Server, error) {
+func startPodHandlerServer(ctx context.Context, handler workload.PodHandler, cfg *apiServerConfig,
+	localClusterID string, remoteConfig *rest.Config) (*http.Server, error) {
 	tlsCfg, err := loadTLSConfig(cfg.CertPath, cfg.KeyPath)
 	if err != nil {
 		klog.Error(err)
@@ -125,12 +108,15 @@ func startPodHandlerServer(ctx context.Context, p *podprovider.LiqoProvider,
 
 	mux := http.NewServeMux()
 
+	cl := kubernetes.NewForConfigOrDie(remoteConfig)
+	attachMetricsRoutes(ctx, mux, cl.RESTClient(), localClusterID)
+
 	podRoutes := api.PodHandlerConfig{
-		RunInContainer:        p.RunInContainer,
-		GetContainerLogs:      p.GetContainerLogs,
-		GetPodsFromKubernetes: getPodsFromKubernetes,
-		GetStatsSummary:       p.GetStatsSummary,
-		GetPods:               p.GetPods,
+		RunInContainer:        handler.Exec,
+		GetContainerLogs:      handler.Logs,
+		GetStatsSummary:       handler.Stats,
+		GetPodsFromKubernetes: handler.List,
+		GetPods:               handler.List,
 	}
 
 	api.AttachPodRoutes(podRoutes, mux, true)
@@ -141,6 +127,41 @@ func startPodHandlerServer(ctx context.Context, p *podprovider.LiqoProvider,
 	}
 	go serveHTTP(ctx, s, l, "pods")
 	return s, nil
+}
+
+func attachMetricsRoutes(ctx context.Context, mux *http.ServeMux, cl rest.Interface, localClusterID string) {
+	handlerFunc := func(w http.ResponseWriter, r *http.Request) {
+		klog.Infof("Received request for %s", r.RequestURI)
+
+		res := cl.Get().RequestURI(path.Clean(fmt.Sprintf("/apis/metrics.liqo.io/v1alpha1/scrape/%s/%s",
+			localClusterID, r.RequestURI))).Do(ctx)
+		err := res.Error()
+		if err != nil {
+			klog.Error(err)
+			http.Error(w, "Server Error", http.StatusInternalServerError)
+			return
+		}
+
+		var statusCode int
+		res.StatusCode(&statusCode)
+
+		data, err := res.Raw()
+		if err != nil {
+			klog.Error(err)
+			http.Error(w, "Server Error", http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(statusCode)
+		if _, err = w.Write(data); err != nil {
+			klog.Error(err)
+		}
+	}
+
+	mux.HandleFunc("/metrics", handlerFunc)
+	mux.HandleFunc("/metrics/cadvisor", handlerFunc)
+	mux.HandleFunc("/metrics/resource", handlerFunc)
+	mux.HandleFunc("/metrics/probes", handlerFunc)
 }
 
 func serveHTTP(ctx context.Context, s *http.Server, l net.Listener, name string) {
@@ -170,7 +191,7 @@ func getAPIConfig(c *Opts) *apiServerConfig {
 	}
 
 	config.Addr = fmt.Sprintf(":%d", c.ListenPort)
-	config.MetricsAddr = c.MetricsAddr
+	config.MetricsAddr = c.MetricsAddress
 
 	return &config
 }

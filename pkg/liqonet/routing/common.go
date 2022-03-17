@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,16 +16,12 @@ package routing
 
 import (
 	"errors"
-	"io/ioutil"
 	"net"
+	"os"
 	"reflect"
-	"strings"
-	"time"
 
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
-	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 
 	"github.com/liqotech/liqo/apis/net/v1alpha1"
@@ -33,8 +29,15 @@ import (
 	"github.com/liqotech/liqo/pkg/liqonet/utils"
 )
 
+const (
+	// DefaultScope is the default value for the route scope.
+	DefaultScope netlink.Scope = 0
+	// DefaultFlags is the default value for the route flags.
+	DefaultFlags int = 0
+)
+
 // AddRoute adds a new route on the given interface.
-func AddRoute(dstNet, gwIP string, iFaceIndex, tableID int) (bool, error) {
+func AddRoute(dstNet, gwIP string, iFaceIndex, tableID, flags int, scope netlink.Scope) (bool, error) {
 	var route *netlink.Route
 	var gatewayIP net.IP
 	// Convert destination in *net.IPNet.
@@ -54,6 +57,8 @@ func AddRoute(dstNet, gwIP string, iFaceIndex, tableID int) (bool, error) {
 		Dst:       destinationNet,
 		Gw:        gatewayIP,
 		LinkIndex: iFaceIndex,
+		Flags:     flags,
+		Scope:     scope,
 	}
 	// Check if already exists a route for the given destination.
 	routes, err := netlink.RouteListFiltered(netlink.FAMILY_V4, route, netlink.RT_FILTER_TABLE|netlink.RT_FILTER_DST)
@@ -307,28 +312,5 @@ func parseIP(ip string) (net.IP, error) {
 
 // EnableIPForwarding enables ipv4 forwarding in the current network namespace.
 func EnableIPForwarding() error {
-	return ioutil.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0600)
-}
-
-// EnableProxyArp enables proxy arp for the given network interface.
-func EnableProxyArp(iFaceName string) error {
-	proxyArpFilePath := strings.Join([]string{"/proc/sys/net/ipv4/conf/", iFaceName, "/proxy_arp"}, "")
-	// When the interface is newly created the configuration file could not be available immediately.
-	// We use a retry mechanism when the file does not exist.
-	retryable := func(err error) bool {
-		return errors.Is(err, unix.ENOENT)
-	}
-	writeToFile := func() error {
-		if err := ioutil.WriteFile(proxyArpFilePath, []byte("1"), 0600); err != nil {
-			klog.Errorf("an error occurred while enabling proxy arp for interface %s: %v", iFaceName, err)
-			return err
-		}
-		return nil
-	}
-	return retry.OnError(wait.Backoff{
-		Steps:    5,
-		Duration: 500 * time.Millisecond,
-		Factor:   1.0,
-		Jitter:   0.1,
-	}, retryable, writeToFile)
+	return os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0600)
 }

@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -52,7 +52,7 @@ func (authService *Controller) ids(w http.ResponseWriter, r *http.Request, ps ht
 
 func (authService *Controller) getIdsResponse() *auth.ClusterInfo {
 	return &auth.ClusterInfo{
-		ClusterID:   authService.localClusterID,
-		ClusterName: authService.localClusterName,
+		ClusterID:   authService.localCluster.ClusterID,
+		ClusterName: authService.localCluster.ClusterName,
 	}
 }

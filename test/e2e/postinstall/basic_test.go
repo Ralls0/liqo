@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,8 +23,12 @@ import (
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/ginkgo/extensions/table"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/klog/v2"
 
+	"github.com/liqotech/liqo/pkg/discovery"
 	"github.com/liqotech/liqo/test/e2e/testutils/tester"
 	"github.com/liqotech/liqo/test/e2e/testutils/util"
 )
@@ -60,6 +64,34 @@ var _ = Describe("Liqo E2E", func() {
 						klog.Infof("Liqo pods status: %d ready, %d not ready", len(readyPods), len(notReadyPods))
 						return err == nil && len(notReadyPods) == 0 && len(readyPods) > 0
 					}, timeout, interval).Should(BeTrue())
+
+					// Check that the pods were not restarted
+					pods, err := cluster.NativeClient.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
+					Expect(err).ToNot(HaveOccurred())
+					for _, pod := range pods.Items {
+						Expect(pod.Status.ContainerStatuses).ToNot(BeEmpty())
+						Expect(pod.Status.ContainerStatuses[0].RestartCount).To(BeNumerically("==", 0))
+					}
+
+					var tenantNsList *corev1.NamespaceList
+					Eventually(func() []corev1.Namespace {
+						namespaceLabel := map[string]string{}
+						namespaceLabel[discovery.TenantNamespaceLabel] = "true"
+						var err error
+						tenantNsList, err = cluster.NativeClient.CoreV1().Namespaces().List(ctx, metav1.ListOptions{
+							LabelSelector: labels.SelectorFromSet(namespaceLabel).String(),
+						})
+						Expect(err).ToNot(HaveOccurred())
+						return tenantNsList.Items
+					}, timeout, interval).Should(HaveLen(testContext.ClustersNumber - 1))
+
+					for _, tenantNs := range tenantNsList.Items {
+						Eventually(func() bool {
+							readyPods, notReadyPods, err := util.ArePodsUp(ctx, cluster.NativeClient, tenantNs.Name)
+							klog.Infof("Tenant pods status: %d ready, %d not ready", len(readyPods), len(notReadyPods))
+							return err == nil && len(notReadyPods) == 0 && len(readyPods) == 1
+						}, timeout, interval).Should(BeTrue())
+					}
 				},
 				PodsUpAndRunningTableEntries...,
 			)

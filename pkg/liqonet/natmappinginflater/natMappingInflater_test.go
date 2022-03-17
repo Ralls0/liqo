@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -552,7 +552,7 @@ func createIpamStorageResource(ipam *netv1alpha1.IpamStorage) error {
 		return err
 	}
 	_, err = inflater.dynClient.
-		Resource(netv1alpha1.IpamGroupResource).
+		Resource(netv1alpha1.IpamGroupVersionResource).
 		Create(context.Background(), &unstructured.Unstructured{Object: unstructuredIpam}, metav1.CreateOptions{})
 	if err != nil {
 		klog.Errorf("cannot create ipam resource: %s", err.Error())

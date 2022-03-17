@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,6 +21,10 @@ import (
 	corev1informers "k8s.io/client-go/informers/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/record"
+
+	liqoclient "github.com/liqotech/liqo/pkg/client/clientset/versioned"
+	liqoinformers "github.com/liqotech/liqo/pkg/client/informers/externalversions"
 )
 
 // Keyer retrieves a NamespacedName referring to the reconciliation target from the object metadata.
@@ -32,6 +36,8 @@ type ReflectorOpts struct {
 	LocalPodInformer corev1informers.PodInformer
 
 	HandlerFactory func(Keyer) cache.ResourceEventHandler
+
+	Ready func() bool
 }
 
 // New returns a new ReflectorOpts object.
@@ -45,16 +51,28 @@ func (ro *ReflectorOpts) WithHandlerFactory(handler func(Keyer) cache.ResourceEv
 	return ro
 }
 
+// WithReadinessFunc configures the readiness function of the ReflectorOpts.
+func (ro *ReflectorOpts) WithReadinessFunc(ready func() bool) *ReflectorOpts {
+	ro.Ready = ready
+	return ro
+}
+
 // NamespacedOpts is a structure grouping the parameters to start a NamespacedReflector.
 type NamespacedOpts struct {
 	LocalNamespace  string
 	RemoteNamespace string
 
-	LocalClient  kubernetes.Interface
-	RemoteClient kubernetes.Interface
+	LocalClient      kubernetes.Interface
+	RemoteClient     kubernetes.Interface
+	LocalLiqoClient  liqoclient.Interface
+	RemoteLiqoClient liqoclient.Interface
 
-	LocalFactory  informers.SharedInformerFactory
-	RemoteFactory informers.SharedInformerFactory
+	LocalFactory      informers.SharedInformerFactory
+	RemoteFactory     informers.SharedInformerFactory
+	LocalLiqoFactory  liqoinformers.SharedInformerFactory
+	RemoteLiqoFactory liqoinformers.SharedInformerFactory
+
+	EventBroadcaster record.EventBroadcaster
 
 	Ready          func() bool
 	HandlerFactory func(Keyer) cache.ResourceEventHandler
@@ -73,11 +91,25 @@ func (ro *NamespacedOpts) WithLocal(namespace string, client kubernetes.Interfac
 	return ro
 }
 
+// WithLiqoLocal configures the local liqo client and informer factory parameters of the NamespacedOpts.
+func (ro *NamespacedOpts) WithLiqoLocal(client liqoclient.Interface, factory liqoinformers.SharedInformerFactory) *NamespacedOpts {
+	ro.LocalLiqoClient = client
+	ro.LocalLiqoFactory = factory
+	return ro
+}
+
 // WithRemote configures the remote parameters of the NamespacedOpts.
 func (ro *NamespacedOpts) WithRemote(namespace string, client kubernetes.Interface, factory informers.SharedInformerFactory) *NamespacedOpts {
 	ro.RemoteNamespace = namespace
 	ro.RemoteClient = client
 	ro.RemoteFactory = factory
+	return ro
+}
+
+// WithLiqoRemote configures the remote liqo client and informer factory parameters of the NamespacedOpts.
+func (ro *NamespacedOpts) WithLiqoRemote(client liqoclient.Interface, factory liqoinformers.SharedInformerFactory) *NamespacedOpts {
+	ro.RemoteLiqoClient = client
+	ro.RemoteLiqoFactory = factory
 	return ro
 }
 
@@ -90,5 +122,11 @@ func (ro *NamespacedOpts) WithHandlerFactory(handler func(Keyer) cache.ResourceE
 // WithReadinessFunc configures the readiness function of the NamespacedOpts.
 func (ro *NamespacedOpts) WithReadinessFunc(ready func() bool) *NamespacedOpts {
 	ro.Ready = ready
+	return ro
+}
+
+// WithEventBroadcaster configures the event broadcaster of the NamespacedOpts.
+func (ro *NamespacedOpts) WithEventBroadcaster(broadcaster record.EventBroadcaster) *NamespacedOpts {
+	ro.EventBroadcaster = broadcaster
 	return ro
 }

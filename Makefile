@@ -5,9 +5,6 @@ else
 GOBIN=$(shell go env GOBIN)
 endif
 
-# Set the capsule version to use
-CAPSULE_VERSION = v0.1.0
-
 generate: generate-controller generate-groups rbacs manifests fmt
 
 #generate helm documentation
@@ -26,14 +23,8 @@ ifeq (, $(shell docker image ls | grep liqo-test))
 	}
 endif
 
-# Fetch external CRDs
-fetch-external-crds:
-	mkdir -p externalcrds
-	curl -s -o externalcrds/tenant-crd.yaml https://raw.githubusercontent.com/clastix/capsule/$(CAPSULE_VERSION)/charts/capsule/crds/tenant-crd.yaml
-	curl -s -o externalcrds/capsuleconfiguration-crd.yaml https://raw.githubusercontent.com/clastix/capsule/$(CAPSULE_VERSION)/charts/capsule/crds/capsuleconfiguration-crd.yaml
-
 # Run unit tests
-unit: test-container fetch-external-crds
+unit: test-container
 	docker run --privileged=true --mount type=bind,src=$(shell pwd),dst=/go/src/liqo -w /go/src/liqo --rm liqo-test
 
 # Install LIQO into a cluster
@@ -70,6 +61,7 @@ rbacs: controller-gen
 	$(CONTROLLER_GEN) paths="./pkg/virtualKubelet/roles/local" rbac:roleName=liqo-virtual-kubelet-local output:rbac:stdout | awk -v RS="---\n" 'NR>1{f="./deployments/liqo/files/liqo-virtual-kubelet-local-" $$4 ".yaml";printf "%s",$$0 > f; close(f)}' &&  sed -i -n '/rules/,$$p' deployments/liqo/files/liqo-virtual-kubelet-local-ClusterRole.yaml
 	$(CONTROLLER_GEN) paths="./pkg/virtualKubelet/roles/remote" rbac:roleName=liqo-virtual-kubelet-remote output:rbac:stdout | awk -v RS="---\n" 'NR>1{f="./deployments/liqo/files/liqo-virtual-kubelet-remote-" $$4 ".yaml";printf "%s",$$0 > f; close(f)}' &&  sed -i -n '/rules/,$$p' deployments/liqo/files/liqo-virtual-kubelet-remote-ClusterRole.yaml
 	$(CONTROLLER_GEN) paths="./cmd/uninstaller" rbac:roleName=liqo-pre-delete output:rbac:stdout | awk -v RS="---\n" 'NR>1{f="./deployments/liqo/files/liqo-pre-delete-" $$4 ".yaml";printf "%s",$$0 > f; close(f)}' &&  sed -i -n '/rules/,$$p' deployments/liqo/files/liqo-pre-delete-ClusterRole.yaml
+	$(CONTROLLER_GEN) paths="./cmd/metric-agent" rbac:roleName=liqo-metric-agent output:rbac:stdout | awk -v RS="---\n" 'NR>1{f="./deployments/liqo/files/liqo-metric-agent-" $$4 ".yaml";printf "%s",$$0 > f; close(f)}' &&  sed -i -n '/rules/,$$p' deployments/liqo/files/liqo-metric-agent-ClusterRole.yaml
 
 # Install gci if not available
 gci:
@@ -109,6 +101,21 @@ fmt: gci addlicense
 	go fmt ./...
 	find . -type f -name '*.go' -a ! -name '*zz_generated*' -exec $(GCI) -local github.com/liqotech/liqo -w {} \;
 	find . -type f -name '*.go' -exec $(ADDLICENSE) -l apache -c "The Liqo Authors" -y "2019-$(shell date +%Y)" {} \;
+
+# Install golangci-lint if not available
+golangci-lint:
+ifeq (, $(shell which golangci-lint))
+	@{ \
+	set -e ;\
+	go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.43.0;\
+	}
+GOLANGCILINT=$(GOBIN)/golangci-lint
+else
+GOLANGCILINT=$(shell which golangci-lint)
+endif
+
+lint: golangci-lint
+	 $(GOLANGCILINT) run --new
 
 generate-controller: controller-gen
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./apis/..."

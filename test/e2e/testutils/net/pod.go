@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,7 +17,6 @@ package net
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
@@ -26,20 +25,23 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 
+	discoveryv1alpha1 "github.com/liqotech/liqo/apis/discovery/v1alpha1"
 	liqoconst "github.com/liqotech/liqo/pkg/consts"
+	foreignclusterutils "github.com/liqotech/liqo/pkg/utils/foreignCluster"
+	"github.com/liqotech/liqo/pkg/virtualKubelet"
 	"github.com/liqotech/liqo/test/e2e/testutils/util"
 )
 
 // TesterOpts contains to handle a connectivity tester pod.
 type TesterOpts struct {
-	ClusterID string
+	Cluster   discoveryv1alpha1.ClusterIdentity
 	PodName   string
 	Offloaded bool
 }
 
 // EnsureNetTesterPods creates the NetTest pods and waits for them to be ready.
 func EnsureNetTesterPods(ctx context.Context, homeClient kubernetes.Interface, cluster1, cluster2 *TesterOpts) error {
-	ns, err := util.EnforceNamespace(ctx, homeClient, cluster1.ClusterID, TestNamespaceName, util.GetNamespaceLabel(true))
+	ns, err := util.EnforceNamespace(ctx, homeClient, cluster1.Cluster, TestNamespaceName, util.GetNamespaceLabel(true))
 	if err != nil && !kerrors.IsAlreadyExists(err) {
 		klog.Error(err)
 		return err
@@ -67,19 +69,21 @@ func EnsureNetTesterPods(ctx context.Context, homeClient kubernetes.Interface, c
 // CheckTesterPods retrieves the netTest pods and returns true if all the pods are up and ready.
 func CheckTesterPods(ctx context.Context,
 	homeClient, cluster1Client, cluster2Client kubernetes.Interface,
-	homeClusterID string, cluster1, cluster2 *TesterOpts) bool {
-	reflectedNamespace := TestNamespaceName + "-" + homeClusterID
-	if !util.IsPodUp(ctx, homeClient, TestNamespaceName, cluster1.PodName, true) ||
-		!util.IsPodUp(ctx, homeClient, TestNamespaceName, cluster2.PodName, true) {
+	homeCluster discoveryv1alpha1.ClusterIdentity, cluster1, cluster2 *TesterOpts) bool {
+	// Note that UniqueName depends on the cluster name, so this may break if the remote cluster uses a different name
+	// than the one we pass as homeCluster
+	reflectedNamespace := TestNamespaceName + "-" + foreignclusterutils.UniqueName(&homeCluster)
+	if !util.IsPodUp(ctx, homeClient, TestNamespaceName, cluster1.PodName, util.PodLocal) ||
+		!util.IsPodUp(ctx, homeClient, TestNamespaceName, cluster2.PodName, util.PodLocal) {
 		return false
 	}
 	if cluster1.Offloaded {
-		if !util.IsPodUp(ctx, cluster1Client, reflectedNamespace, cluster1.PodName, false) {
+		if !util.IsPodUp(ctx, cluster1Client, reflectedNamespace, cluster1.PodName, util.PodRemote) {
 			return false
 		}
 	}
 	if cluster2.Offloaded {
-		if !util.IsPodUp(ctx, cluster2Client, reflectedNamespace, cluster2.PodName, false) {
+		if !util.IsPodUp(ctx, cluster2Client, reflectedNamespace, cluster2.PodName, util.PodRemote) {
 			return false
 		}
 	}
@@ -99,7 +103,7 @@ func forgeTesterPod(image, namespace string, opts *TesterOpts) *v1.Pod {
 	if opts.Offloaded {
 		NodeAffinityOperator = v1.NodeSelectorOpIn
 		nodeSelector = map[string]string{
-			"kubernetes.io/hostname": strings.Join([]string{"liqo", opts.ClusterID}, "-"),
+			"kubernetes.io/hostname": virtualKubelet.VirtualNodeName(opts.Cluster),
 		}
 	}
 

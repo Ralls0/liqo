@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,19 +15,17 @@
 package tenantnamespace
 
 import (
-	"context"
-
 	v1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+
+	discoveryv1alpha1 "github.com/liqotech/liqo/apis/discovery/v1alpha1"
 )
 
 // Manager provides the methods to handle the creation and
 // the management of tenant namespaces.
 type Manager interface {
-	CreateNamespace(clusterID string) (*v1.Namespace, error)
-	GetNamespace(clusterID string) (*v1.Namespace, error)
-	BindClusterRoles(clusterID string, clusterRoles ...*rbacv1.ClusterRole) ([]*rbacv1.RoleBinding, error)
-	UnbindClusterRoles(clusterID string, clusterRoles ...string) error
-	BindOutgoingClusterWideRole(ctx context.Context, clusterID string) (*rbacv1.ClusterRoleBinding, error)
-	UnbindOutgoingClusterWideRole(ctx context.Context, clusterID string) error
+	CreateNamespace(cluster discoveryv1alpha1.ClusterIdentity) (*v1.Namespace, error)
+	GetNamespace(cluster discoveryv1alpha1.ClusterIdentity) (*v1.Namespace, error)
+	BindClusterRoles(cluster discoveryv1alpha1.ClusterIdentity, clusterRoles ...*rbacv1.ClusterRole) ([]*rbacv1.RoleBinding, error)
+	UnbindClusterRoles(cluster discoveryv1alpha1.ClusterIdentity, clusterRoles ...string) error
 }

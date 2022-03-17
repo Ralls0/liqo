@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,8 +17,8 @@ package overlay
 import (
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"net"
+	"os"
 	"reflect"
 	"strings"
 	"syscall"
@@ -214,7 +214,7 @@ func (vxlan *VxlanDevice) enableRPFilter() error {
 	klog.V(4).Infof("setting reverse path filtering for interface {%s} to loose mode", ifaceName)
 	rpFilterFilePath := strings.Join([]string{"/proc/sys/net/ipv4/conf/", ifaceName, "/rp_filter"}, "")
 	// Enable loose mode reverse path filtering on the overlay interface.
-	err := ioutil.WriteFile(rpFilterFilePath, []byte("2"), 0600)
+	err := os.WriteFile(rpFilterFilePath, []byte("2"), 0600)
 	if err != nil {
 		klog.Errorf("an error occurred while writing to file %s: %v", rpFilterFilePath, err)
 		return err

@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -31,7 +32,7 @@ import (
 
 const (
 	linuxos      = "Linux"
-	architecture = "arm64"
+	architecture = "amd64"
 
 	labelNodeExcludeBalancersAlpha = "alpha.service-controller.kubernetes.io/exclude-balancer"
 	roleLabelKey                   = "kubernetes.io/role"
@@ -41,41 +42,41 @@ const (
 // InitConfig is the config passed to initialize the LiqoNodeProvider.
 type InitConfig struct {
 	HomeConfig      *rest.Config
+	RemoteConfig    *rest.Config
 	HomeClusterID   string
 	RemoteClusterID string
 	Namespace       string
 
 	NodeName         string
 	InternalIP       string
-	DaemonPort       int32
+	DaemonPort       uint16
 	Version          string
 	ExtraLabels      map[string]string
 	ExtraAnnotations map[string]string
 
 	PodProviderStopper   chan struct{}
 	InformerResyncPeriod time.Duration
+	PingDisabled         bool
 }
 
 // NewLiqoNodeProvider creates and returns a new LiqoNodeProvider.
 func NewLiqoNodeProvider(cfg *InitConfig) *LiqoNodeProvider {
-	client := kubernetes.NewForConfigOrDie(cfg.HomeConfig)
-	dynClient := dynamic.NewForConfigOrDie(cfg.HomeConfig)
-
 	return &LiqoNodeProvider{
-		client:    client,
-		dynClient: dynClient,
+		localClient:           kubernetes.NewForConfigOrDie(cfg.HomeConfig),
+		remoteDiscoveryClient: discovery.NewDiscoveryClientForConfigOrDie(cfg.RemoteConfig),
+		dynClient:             dynamic.NewForConfigOrDie(cfg.HomeConfig),
 
 		node:              node(cfg),
 		terminating:       false,
 		lastAppliedLabels: map[string]string{},
 
-		networkReady:       false,
-		podProviderStopper: cfg.PodProviderStopper,
-		resyncPeriod:       cfg.InformerResyncPeriod,
+		networkReady: false,
+		resyncPeriod: cfg.InformerResyncPeriod,
+		pingDisabled: cfg.PingDisabled,
 
 		nodeName:         cfg.NodeName,
 		foreignClusterID: cfg.RemoteClusterID,
-		kubeletNamespace: cfg.Namespace,
+		tenantNamespace:  cfg.Namespace,
 	}
 }
 
@@ -114,7 +115,7 @@ func node(cfg *InitConfig) *corev1.Node {
 				OperatingSystem: linuxos,
 			},
 			Addresses:       []corev1.NodeAddress{{Type: corev1.NodeInternalIP, Address: cfg.InternalIP}},
-			DaemonEndpoints: corev1.NodeDaemonEndpoints{KubeletEndpoint: corev1.DaemonEndpoint{Port: cfg.DaemonPort}},
+			DaemonEndpoints: corev1.NodeDaemonEndpoints{KubeletEndpoint: corev1.DaemonEndpoint{Port: int32(cfg.DaemonPort)}},
 			Capacity:        corev1.ResourceList{},
 			Allocatable:     corev1.ResourceList{},
 			Conditions:      UnknownNodeConditions(),

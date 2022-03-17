@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,13 +17,13 @@ package main
 import (
 	"flag"
 	"os"
-	"strings"
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/selection"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
@@ -33,7 +33,7 @@ import (
 	"github.com/liqotech/liqo/pkg/liqonet/overlay"
 	liqorouting "github.com/liqotech/liqo/pkg/liqonet/routing"
 	"github.com/liqotech/liqo/pkg/liqonet/utils"
-	"github.com/liqotech/liqo/pkg/mapperUtils"
+	"github.com/liqotech/liqo/pkg/utils/mapper"
 	"github.com/liqotech/liqo/pkg/utils/restcfg"
 )
 
@@ -78,23 +78,23 @@ func runRouteOperator(commonFlags *liqonetCommonFlags, routeFlags *routeOperator
 		os.Exit(1)
 	}
 	// Asking the api-server to only inform the operator for the pods running in a node different from the one
-	// where the operator is running.
-	smcFieldSelector, err := fields.ParseSelector(strings.Join([]string{"spec.nodeName", "!=", nodeName}, ""))
-	if err != nil {
-		klog.Errorf("unable to create label requirement: %v", err)
-		os.Exit(1)
-	}
+	// where the operator is running, and that have a valid podIP set. The latter check also prevents newly created
+	// pods scheduled on a virtual node to be temporarily considered while waiting for the appropriate label to be
+	// added by the virtual kubelet. Indeed, when pods are created the label is not present, but we are sure that
+	// it will be added before the IP address for the same pod is set.
+	smcFieldSelector := fields.AndSelectors(
+		fields.OneTermNotEqualSelector("spec.nodeName", nodeName),
+		fields.OneTermNotEqualSelector("status.podIP", ""),
+	)
 	// Asking the api-server to only inform the operator for the pods running in a node different from
 	// the virtual nodes. We want to process only the pods running on the local cluster and not the ones
 	// offloaded to a remote cluster.
-	smcLabelRequirement, err := labels.NewRequirement(liqoconst.LocalPodLabelKey, selection.DoesNotExist, []string{})
-	if err != nil {
-		klog.Errorf("unable to create label requirement: %v", err)
-		os.Exit(1)
-	}
+	smcLabelRequirement, err := labels.NewRequirement(liqoconst.LocalPodLabelKey, selection.NotEquals, []string{liqoconst.LocalPodLabelValue})
+	utilruntime.Must(err)
+
 	smcLabelSelector := labels.NewSelector().Add(*smcLabelRequirement)
 	mainMgr, err := ctrl.NewManager(restcfg.SetRateLimiter(ctrl.GetConfigOrDie()), ctrl.Options{
-		MapperProvider:     mapperUtils.LiqoMapperProvider(scheme),
+		MapperProvider:     mapper.LiqoMapperProvider(scheme),
 		Scheme:             scheme,
 		MetricsBindAddress: commonFlags.metricsAddr,
 		NewCache: cache.BuilderWithOptions(cache.Options{
@@ -118,7 +118,7 @@ func runRouteOperator(commonFlags *liqonetCommonFlags, routeFlags *routeOperator
 	// This manager is used by the overlay operator and it is limited to the pods running
 	// on the same namespace as the operator.
 	overlayMgr, err := ctrl.NewManager(mainMgr.GetConfig(), ctrl.Options{
-		MapperProvider:     mapperUtils.LiqoMapperProvider(scheme),
+		MapperProvider:     mapper.LiqoMapperProvider(scheme),
 		Scheme:             scheme,
 		MetricsBindAddress: ":0",
 		Namespace:          podNamespace,

@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,8 +19,7 @@ const (
 	LiqoctlOffloadShortHelp = "Offload a namespace to remote clusters"
 	// LiqoctlOffloadLongHelp contains the Long help string for liqoctl Offload command.
 	LiqoctlOffloadLongHelp = `Offload a namespace to remote clusters with the default values:
-
-$ liqoctl Offload cluster my-cluster
+$ liqoctl offload namespace liqo-demo
 
 To just enable service reflection, offload a namespace with the EnforceSameName namespace mapping strategy and
 and a Local --pod-offloading-strategy.
@@ -33,16 +32,19 @@ $ liqoctl offload namespace liqo-demo --namespace-mapping-strategy=EnforceSameNa
 	ClusterResourceName = "namespace"
 	// SuccessfulMessage is printed when a Offload cluster command has scucceded.
 	SuccessfulMessage = `
-	Success 👌!
+Success 👌! The offloading rules for the namespace %s has been created/updated on the cluster! 🚀
+Check them out by typing: 
+kubectl get namespaceoffloading -n %s %s
 `
 	// PodOffloadingStrategyFlag specifies the pod offloading strategy flag name.
 	PodOffloadingStrategyFlag = "pod-offloading-strategy"
 	// PodOffloadingStrategyHelp specifies the help message for the PodOffloadingStrategy flag.
-	PodOffloadingStrategyHelp = "Select the desired pod offloading strategy"
+	PodOffloadingStrategyHelp = "Select the desired pod offloading strategy (Local, LocalAndRemote, Remote) "
+
 	// NamespaceMappingStrategyFlag specifies the namespace mapping flag name.
 	NamespaceMappingStrategyFlag = "namespace-mapping-strategy"
 	// NamespaceMappingStrategyHelp specifies the help message for the NamespaceMappingStrategy flag.
-	NamespaceMappingStrategyHelp = "Select the desired pod offloading strategy"
+	NamespaceMappingStrategyHelp = "Select the desired namespace mapping strategy (EnforceSameName, DefaultName) "
 
 	// AcceptedLabelsFlag specifies the accepted labels flag name.
 	AcceptedLabelsFlag = "accepted-cluster-labels"

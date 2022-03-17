@@ -72,10 +72,16 @@ spec:
                     type: string
                 required:
                 - clusterID
+                - clusterName
                 type: object
               foreignAuthUrl:
                 description: URL where to contact foreign Auth service.
                 pattern: https:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)
+                type: string
+              foreignProxyUrl:
+                description: URL where to contact foreign proxy for the api server.
+                  This URL is used when creating the k8s clients toward the remote
+                  cluster.
                 type: string
               incomingPeeringEnabled:
                 default: Auto
@@ -91,6 +97,14 @@ spec:
                 description: Indicates if the local cluster has to skip the tls verification
                   over the remote Authentication Service or not.
                 type: boolean
+              networkingEnabled:
+                default: "Yes"
+                description: Indicates if Liqo has to handle the network interconnection
+                  with the remote cluster.
+                enum:
+                - "No"
+                - "Yes"
+                type: string
               outgoingPeeringEnabled:
                 default: Auto
                 description: Enable the peering process to the remote cluster.

@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,7 +15,6 @@
 package eks
 
 import (
-	"io/ioutil"
 	"os"
 	"path/filepath"
 
@@ -65,11 +64,8 @@ func storeIamAccessKey(iamUserName, accessKeyID, secretAccessKey string) error {
 	}
 
 	fileName := filepath.Join(liqoDirPath, liqoIamCredentialsFile)
-	if err = ioutil.WriteFile(fileName, data, 0600); err != nil {
-		return err
-	}
 
-	return nil
+	return os.WriteFile(fileName, data, 0600)
 }
 
 func retrieveIamAccessKey(iamUserName string) (accessKeyID, secretAccessKey string, err error) {
@@ -98,7 +94,7 @@ func readCache() (iamUserCredentialCache, error) {
 		return iamUserCredentialCache{}, nil
 	}
 
-	data, err := ioutil.ReadFile(filepath.Clean(fileName))
+	data, err := os.ReadFile(filepath.Clean(fileName))
 	if err != nil {
 		return nil, err
 	}

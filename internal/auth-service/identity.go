@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@ package authservice
 import (
 	"context"
 	"encoding/json"
-	"io/ioutil"
+	"io"
 	"net/http"
 
 	"github.com/julienschmidt/httprouter"
@@ -28,7 +28,7 @@ import (
 
 	"github.com/liqotech/liqo/pkg/auth"
 	autherrors "github.com/liqotech/liqo/pkg/auth/errors"
-	authenticationtoken "github.com/liqotech/liqo/pkg/utils/authenticationtoken"
+	"github.com/liqotech/liqo/pkg/utils/authenticationtoken"
 	traceutils "github.com/liqotech/liqo/pkg/utils/trace"
 )
 
@@ -38,7 +38,7 @@ func (authService *Controller) identity(w http.ResponseWriter, r *http.Request, 
 	ctx := trace.ContextWithTrace(r.Context(), tracer)
 	defer tracer.LogIfLong(traceutils.LongThreshold())
 
-	bytes, err := ioutil.ReadAll(r.Body)
+	bytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		klog.Error(err)
 		authService.handleError(w, err)
@@ -94,8 +94,9 @@ func (authService *Controller) handleIdentity(
 	}
 	tracer.Step("Credentials checked")
 
-	klog.V(4).Infof("Creating Tenant Namespace for cluster %v", identityRequest.GetClusterID())
-	namespace, err := authService.namespaceManager.CreateNamespace(identityRequest.GetClusterID())
+	remoteClusterIdentity := identityRequest.ClusterIdentity
+	klog.V(4).Infof("Creating Tenant Namespace for cluster %s", remoteClusterIdentity)
+	namespace, err := authService.namespaceManager.CreateNamespace(remoteClusterIdentity)
 	if err != nil {
 		klog.Error(err)
 		return nil, err
@@ -104,7 +105,7 @@ func (authService *Controller) handleIdentity(
 
 	// check that there is no available certificate for that clusterID
 	if _, err = authService.identityProvider.GetRemoteCertificate(
-		identityRequest.ClusterID, namespace.Name, identityRequest.CertificateSigningRequest); err == nil {
+		remoteClusterIdentity, namespace.Name, identityRequest.CertificateSigningRequest); err == nil {
 		klog.Info("multiple identity validations with unique clusterID")
 		err = &kerrors.StatusError{ErrStatus: metav1.Status{
 			Status: metav1.StatusFailure,
@@ -121,7 +122,7 @@ func (authService *Controller) handleIdentity(
 
 	// issue certificate request
 	identityResponse, err := authService.identityProvider.ApproveSigningRequest(
-		identityRequest.ClusterID, identityRequest.CertificateSigningRequest)
+		remoteClusterIdentity, identityRequest.CertificateSigningRequest)
 	if err != nil {
 		klog.Error(err)
 		return nil, err
@@ -130,7 +131,7 @@ func (authService *Controller) handleIdentity(
 
 	// bind basic permission required to start the peering
 	if _, err = authService.namespaceManager.BindClusterRoles(
-		identityRequest.GetClusterID(), authService.peeringPermission.Basic...); err != nil {
+		remoteClusterIdentity, authService.peeringPermission.Basic...); err != nil {
 		klog.Error(err)
 		return nil, err
 	}
@@ -147,7 +148,7 @@ func (authService *Controller) handleIdentity(
 	if identityRequest.OriginClusterToken != "" {
 		// store the retrieved token
 		err = authenticationtoken.StoreInSecret(ctx, authService.clientset,
-			identityRequest.ClusterID, identityRequest.OriginClusterToken, authService.namespace)
+			remoteClusterIdentity.ClusterID, identityRequest.OriginClusterToken, authService.namespace)
 		if err != nil {
 			klog.Error(err)
 			return nil, err
@@ -155,6 +156,6 @@ func (authService *Controller) handleIdentity(
 		tracer.Step("Origin cluster token stored")
 	}
 
-	klog.Infof("Identity Request successfully validated for cluster %v", identityRequest.GetClusterID())
+	klog.Infof("Identity Request successfully validated for cluster %s", remoteClusterIdentity)
 	return response, nil
 }

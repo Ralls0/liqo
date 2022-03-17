@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -87,7 +87,7 @@ var expectedResultMap = map[string]interface{}{
 	},
 }
 
-func TestFusionMaps(t *testing.T) {
+func TestMergeMaps(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Test Map Fusion")
 }
@@ -95,7 +95,7 @@ func TestFusionMaps(t *testing.T) {
 var _ = Describe("Test Map Fusion", func() {
 
 	It("Returns a map with all expected keys and values", func() {
-		finalMap, err := FusionMap(m1, m2)
+		finalMap, err := MergeMaps(m1, m2)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(reflect.DeepEqual(finalMap, expectedResultMap)).To(BeTrue())
 	})

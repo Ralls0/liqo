@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -86,11 +86,15 @@ func (r *ResourceOfferReconciler) checkVirtualKubeletDeployment(
 // createVirtualKubeletDeployment creates the VirtualKubelet Deployment.
 func (r *ResourceOfferReconciler) createVirtualKubeletDeployment(
 	ctx context.Context, resourceOffer *sharingv1alpha1.ResourceOffer) error {
-	name := virtualKubelet.VirtualKubeletPrefix + resourceOffer.Spec.ClusterId
-	nodeName := virtualKubelet.VirtualNodeName(resourceOffer.Spec.ClusterId)
-
 	namespace := resourceOffer.Namespace
-	remoteClusterID := resourceOffer.Spec.ClusterId
+	remoteCluster, err := foreigncluster.GetForeignClusterByID(ctx, r.Client, resourceOffer.Spec.ClusterId)
+	if err != nil {
+		return err
+	}
+	remoteClusterIdentity := remoteCluster.Spec.ClusterIdentity
+
+	name := virtualKubelet.VirtualKubeletPrefix + remoteClusterIdentity.ClusterID
+	nodeName := virtualKubelet.VirtualNodeName(remoteClusterIdentity)
 
 	// create the base resources
 	vkServiceAccount := forge.VirtualKubeletServiceAccount(name, namespace)
@@ -101,9 +105,10 @@ func (r *ResourceOfferReconciler) createVirtualKubeletDeployment(
 		klog.Error(err)
 		return err
 	}
-	klog.V(5).Infof("[%v] ServiceAccount %s/%s reconciled: %s", remoteClusterID, vkServiceAccount.Namespace, vkServiceAccount.Name, op)
+	klog.V(5).Infof("[%v] ServiceAccount %s/%s reconciled: %s",
+		remoteClusterIdentity.ClusterName, vkServiceAccount.Namespace, vkServiceAccount.Name, op)
 
-	vkClusterRoleBinding := forge.VirtualKubeletClusterRoleBinding(name, namespace, remoteClusterID)
+	vkClusterRoleBinding := forge.VirtualKubeletClusterRoleBinding(name, namespace, remoteClusterIdentity.ClusterID)
 	op, err = controllerutil.CreateOrUpdate(ctx, r.Client, vkClusterRoleBinding, func() error {
 		return nil
 	})
@@ -112,12 +117,13 @@ func (r *ResourceOfferReconciler) createVirtualKubeletDeployment(
 		return err
 	}
 
-	klog.V(5).Infof("[%v] ClusterRoleBinding %s reconciled: %s", remoteClusterID, vkClusterRoleBinding.Name, op)
+	klog.V(5).Infof("[%v] ClusterRoleBinding %s reconciled: %s",
+		remoteClusterIdentity.ClusterName, vkClusterRoleBinding.Name, op)
 
 	// forge the virtual Kubelet
 	vkDeployment, err := forge.VirtualKubeletDeployment(
-		remoteClusterID, name, namespace, r.liqoNamespace,
-		nodeName, r.clusterID, r.virtualKubeletOpts)
+		r.cluster, remoteClusterIdentity, name, namespace, r.liqoNamespace,
+		nodeName, r.virtualKubeletOpts, resourceOffer)
 	if err != nil {
 		klog.Error(err)
 		return err
@@ -135,10 +141,12 @@ func (r *ResourceOfferReconciler) createVirtualKubeletDeployment(
 		klog.Error(err)
 		return err
 	}
-	klog.V(5).Infof("[%v] Deployment %s/%s reconciled: %s", remoteClusterID, vkDeployment.Namespace, vkDeployment.Name, op)
+	klog.V(5).Infof("[%v] Deployment %s/%s reconciled: %s",
+		remoteClusterIdentity.ClusterName, vkDeployment.Namespace, vkDeployment.Name, op)
 
 	if op == controllerutil.OperationResultCreated {
-		msg := fmt.Sprintf("[%v] Launching virtual-kubelet in namespace %v", remoteClusterID, namespace)
+		msg := fmt.Sprintf("[%v] Launching virtual-kubelet in namespace %v",
+			remoteClusterIdentity.ClusterName, namespace)
 		klog.Info(msg)
 		r.eventsRecorder.Event(resourceOffer, "Normal", "VkCreated", msg)
 	}

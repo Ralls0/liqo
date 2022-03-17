@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -31,6 +31,7 @@ import (
 	offloadingv1alpha1 "github.com/liqotech/liqo/apis/offloading/v1alpha1"
 	virtualkubeletv1alpha1 "github.com/liqotech/liqo/apis/virtualkubelet/v1alpha1"
 	liqoconst "github.com/liqotech/liqo/pkg/consts"
+	foreignclusterutils "github.com/liqotech/liqo/pkg/utils/foreignCluster"
 	"github.com/liqotech/liqo/test/e2e/testutils/tester"
 	"github.com/liqotech/liqo/test/e2e/testutils/util"
 )
@@ -61,8 +62,8 @@ var _ = Describe("Liqo E2E", func() {
 		localIndex  = 0
 		// index of the cluster on which the remote namespace is deleted to test the recreation process.
 		remoteIndex             = 2
-		localClusterID          = testContext.Clusters[localIndex].ClusterID
-		remoteTestNamespaceName = fmt.Sprintf("%s-%s", testNamespaceName, localClusterID)
+		localCluster            = testContext.Clusters[localIndex].Cluster
+		remoteTestNamespaceName = fmt.Sprintf("%s-%s", testNamespaceName, localCluster.ClusterName)
 	)
 
 	Context(fmt.Sprintf("Create a namespace inside the cluster '%d' with the liqo enabling label and check if the remote namespaces"+
@@ -76,7 +77,7 @@ var _ = Describe("Liqo E2E", func() {
 			By(fmt.Sprintf(" 1 - Creating the local namespace inside the cluster '%d'", localIndex))
 			Eventually(func() error {
 				_, err := util.EnforceNamespace(ctx, testContext.Clusters[localIndex].NativeClient,
-					testContext.Clusters[localIndex].ClusterID, testNamespaceName,
+					testContext.Clusters[localIndex].Cluster, testNamespaceName,
 					util.GetNamespaceLabel(true))
 				return err
 			}, timeout, interval).Should(BeNil())
@@ -131,9 +132,9 @@ var _ = Describe("Liqo E2E", func() {
 					return testContext.Clusters[i].ControllerClient.Get(ctx,
 						types.NamespacedName{Name: remoteTestNamespaceName}, namespace)
 				}, longTimeout, interval).Should(BeNil())
-				value, ok := namespace.Annotations[liqoconst.RemoteNamespaceAnnotationKey]
+				value, ok := namespace.Annotations[liqoconst.RemoteNamespaceManagedByAnnotationKey]
 				Expect(ok).To(BeTrue())
-				Expect(value).To(Equal(localClusterID))
+				Expect(value).To(HaveSuffix(foreignclusterutils.UniqueName(&testContext.Clusters[i].Cluster)))
 			}
 
 			var oldUIDRemoteNamespace types.UID

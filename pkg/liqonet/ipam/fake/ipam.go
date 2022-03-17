@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -96,4 +96,10 @@ func (mock *IPAMClient) GetHomePodIP(_ context.Context, req *ipam.GetHomePodIPRe
 	}
 	mock.pods[req.GetIp()] = homeIP
 	return &ipam.GetHomePodIPResponse{HomeIP: homeIP}, nil
+}
+
+// BelongsToPodCIDR mocks the corresponding IPAMClient function.
+func (mock *IPAMClient) BelongsToPodCIDR(context.Context, *ipam.BelongsRequest,
+	...grpc.CallOption) (*ipam.BelongsResponse, error) {
+	return &ipam.BelongsResponse{Belongs: true}, nil
 }

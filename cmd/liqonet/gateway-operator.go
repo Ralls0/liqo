@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -30,9 +30,9 @@ import (
 	tunneloperator "github.com/liqotech/liqo/internal/liqonet/tunnel-operator"
 	liqoconst "github.com/liqotech/liqo/pkg/consts"
 	liqonetns "github.com/liqotech/liqo/pkg/liqonet/netns"
-	tunnelwg "github.com/liqotech/liqo/pkg/liqonet/tunnel/wireguard"
 	"github.com/liqotech/liqo/pkg/liqonet/utils"
-	"github.com/liqotech/liqo/pkg/mapperUtils"
+	"github.com/liqotech/liqo/pkg/liqonet/utils/links"
+	"github.com/liqotech/liqo/pkg/utils/mapper"
 	"github.com/liqotech/liqo/pkg/utils/restcfg"
 )
 
@@ -87,7 +87,7 @@ func runGatewayOperator(commonFlags *liqonetCommonFlags, gatewayFlags *gatewayOp
 		os.Exit(1)
 	}
 	main, err := ctrl.NewManager(restcfg.SetRateLimiter(ctrl.GetConfigOrDie()), ctrl.Options{
-		MapperProvider:                mapperUtils.LiqoMapperProvider(scheme),
+		MapperProvider:                mapper.LiqoMapperProvider(scheme),
 		Scheme:                        scheme,
 		MetricsBindAddress:            metricsAddr,
 		LeaderElection:                enableLeaderElection,
@@ -145,8 +145,8 @@ func runGatewayOperator(commonFlags *liqonetCommonFlags, gatewayFlags *gatewayOp
 			klog.Errorf("an error occurred while deleting netns {%s}: %v", liqoconst.GatewayNetnsName, err)
 		}
 		klog.Info("cleaning up wireguard tunnel interface")
-		if err := utils.DeleteIFaceByName(tunnelwg.DeviceName); err != nil {
-			klog.Errorf("an error occurred while deleting iface {%s}: %v", tunnelwg.DriverName, err)
+		if err := links.DeleteIFaceByName(liqoconst.DeviceName); err != nil {
+			klog.Errorf("an error occurred while deleting iface {%s}: %v", liqoconst.DriverName, err)
 		}
 		os.Exit(1)
 	}

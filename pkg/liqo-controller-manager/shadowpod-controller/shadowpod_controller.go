@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/klog/v2"
@@ -31,6 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	vkv1alpha1 "github.com/liqotech/liqo/apis/virtualkubelet/v1alpha1"
+	"github.com/liqotech/liqo/pkg/consts"
 	liqoerrors "github.com/liqotech/liqo/pkg/utils/errors"
 )
 
@@ -41,6 +43,7 @@ type Reconciler struct {
 }
 
 // +kubebuilder:rbac:groups=virtualkubelet.liqo.io,resources=shadowpods,verbs=get;list;watch;update;patch;delete
+// +kubebuilder:rbac:groups=virtualkubelet.liqo.io,resources=shadowpods/finalizers,verbs=get;update;patch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile ShadowPods objects.
@@ -61,7 +64,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        nsName.Name,
 			Namespace:   nsName.Namespace,
-			Labels:      shadowPod.Labels,
+			Labels:      labels.Merge(shadowPod.Labels, labels.Set{consts.ManagedByLabelKey: consts.ManagedByShadowPodValue}),
 			Annotations: shadowPod.Annotations,
 		},
 		Spec: shadowPod.Spec.Pod,

@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@ package foreignclusteroperator
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -30,13 +31,16 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	discoveryv1alpha1 "github.com/liqotech/liqo/apis/discovery/v1alpha1"
 	netv1alpha1 "github.com/liqotech/liqo/apis/net/v1alpha1"
+	sharingv1alpha1 "github.com/liqotech/liqo/apis/sharing/v1alpha1"
 	liqoconst "github.com/liqotech/liqo/pkg/consts"
 	identitymanager "github.com/liqotech/liqo/pkg/identityManager"
+	resourcerequestoperator "github.com/liqotech/liqo/pkg/liqo-controller-manager/resource-request-controller"
 	peeringRoles "github.com/liqotech/liqo/pkg/peering-roles"
 	tenantnamespace "github.com/liqotech/liqo/pkg/tenantNamespace"
 	"github.com/liqotech/liqo/pkg/utils/authenticationtoken"
@@ -57,6 +61,9 @@ const (
 
 	resourceRequestPendingReason  = "ResourceRequestPending"
 	resourceRequestPendingMessage = "The remote cluster has not created a ResourceOffer in the Tenant Namespace %v yet"
+
+	virtualKubeletPendingReason  = "KubeletPending"
+	virtualKubeletPendingMessage = "The remote cluster has not started the VirtualKubelet for the peering yet"
 
 	resourceRequestCreatedReason  = "ResourceRequestCreated"
 	resourceRequestCreatedMessage = "The ResourceRequest has been created in the Tenant Namespace %v"
@@ -89,18 +96,19 @@ type ForeignClusterReconciler struct {
 
 	LiqoNamespace string
 
-	ResyncPeriod                         time.Duration
-	ClusterID                            string
-	ClusterName                          string
-	AuthServiceAddressOverride           string
-	AuthServicePortOverride              string
-	AutoJoin                             bool
-	OwnerReferencesPermissionEnforcement bool
+	ResyncPeriod               time.Duration
+	HomeCluster                discoveryv1alpha1.ClusterIdentity
+	AuthServiceAddressOverride string
+	AuthServicePortOverride    string
+	AutoJoin                   bool
 
 	NamespaceManager tenantnamespace.Manager
 	IdentityManager  identitymanager.IdentityManager
 
 	PeeringPermission peeringRoles.PeeringPermission
+
+	InsecureTransport *http.Transport
+	SecureTransport   *http.Transport
 }
 
 // clusterRole
@@ -126,7 +134,6 @@ type ForeignClusterReconciler struct {
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;create;deletecollection;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;create;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;create;delete
-// +kubebuilder:rbac:groups=capsule.clastix.io,resources=tenants/finalizers,verbs=get;patch;update
 // role
 // +kubebuilder:rbac:groups=core,namespace="liqo",resources=services,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,namespace="liqo",resources=configmaps,verbs=get;list;watch;create;update;delete
@@ -176,7 +183,8 @@ func (r *ForeignClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// defer the status update function
 	defer updateStatus()
 
-	// ensure that there are not multiple clusters with the same clusterID
+	// ensure that there are not multiple clusters with the same clusterID.
+	// ensure that the foreign cluster proxy URL is a valid one is set.
 	if processable, err := r.isClusterProcessable(ctx, &foreignCluster); err != nil {
 		klog.Error(err)
 		return ctrl.Result{}, err
@@ -256,8 +264,8 @@ func (r *ForeignClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	tracer.Step("Checked the TunnelEndpoint status")
 
 	// check if peering request really exists on foreign cluster
-	if err := r.checkIncomingPeeringStatus(ctx, &foreignCluster); err != nil {
-		klog.Error(err)
+	if err = r.checkIncomingPeeringStatus(ctx, &foreignCluster); err != nil {
+		klog.Error("[%s] %s", foreignCluster.Spec.ClusterIdentity.ClusterID, err)
 		return ctrl.Result{}, err
 	}
 	tracer.Step("Checked the incoming peering status")
@@ -313,8 +321,13 @@ func (r *ForeignClusterReconciler) peerNamespaced(ctx context.Context,
 		return err
 	}
 
+	resourceOffer, err := r.getOutgoingResourceOffer(ctx, foreignCluster)
+	if err != nil {
+		return fmt.Errorf("reading resource offers: %w", err)
+	}
+
 	// Update the peering status based on the ResourceRequest status
-	status, reason, message, err := getPeeringPhase(foreignCluster, resourceRequest)
+	status, reason, message, err := getPeeringPhase(foreignCluster, resourceRequest, resourceOffer)
 	if err != nil {
 		err = fmt.Errorf("[%v] %w", foreignCluster.Spec.ClusterIdentity.ClusterID, err)
 		klog.Error(err)
@@ -333,7 +346,7 @@ func (r *ForeignClusterReconciler) unpeerNamespaced(ctx context.Context,
 	var resourceRequest discoveryv1alpha1.ResourceRequest
 	err := r.Client.Get(ctx, types.NamespacedName{
 		Namespace: foreignCluster.Status.TenantNamespace.Local,
-		Name:      r.ClusterID,
+		Name:      getResourceRequestNameFor(r.HomeCluster),
 	}, &resourceRequest)
 	if errors.IsNotFound(err) {
 		peeringconditionsutils.EnsureStatus(foreignCluster,
@@ -387,8 +400,26 @@ func (r *ForeignClusterReconciler) SetupWithManager(mgr ctrl.Manager, workers ui
 		Owns(&netv1alpha1.TunnelEndpoint{}).
 		Watches(&source.Kind{Type: &corev1.Secret{}}, authenticationtoken.GetAuthTokenSecretEventHandler(r.Client),
 			builder.WithPredicates(authenticationtoken.GetAuthTokenSecretPredicate())).
+		Watches(&source.Kind{Type: &sharingv1alpha1.ResourceOffer{}},
+			handler.EnqueueRequestsFromMapFunc(r.resourceOfferHandler)).
 		WithOptions(controller.Options{MaxConcurrentReconciles: int(workers)}).
 		Complete(r)
+}
+
+func (r *ForeignClusterReconciler) resourceOfferHandler(obj client.Object) []ctrl.Request {
+	ro := obj.(*sharingv1alpha1.ResourceOffer)
+	var clusterID string
+	if _, ok := ro.Labels[liqoconst.ReplicationStatusLabel]; ok { // incoming resource offer
+		clusterID = ro.Labels[liqoconst.ReplicationOriginLabel]
+	} else {
+		clusterID = ro.Labels[liqoconst.ReplicationDestinationLabel]
+	}
+	remoteCluster, err := foreignclusterutils.GetForeignClusterByID(context.Background(), r.Client, clusterID)
+	if err != nil {
+		klog.Warningf("Could not handle resource offer %q update: %s", klog.KObj(ro), err)
+		return []ctrl.Request{}
+	}
+	return []ctrl.Request{{NamespacedName: types.NamespacedName{Name: remoteCluster.Name}}}
 }
 
 func (r *ForeignClusterReconciler) checkIncomingPeeringStatus(ctx context.Context,
@@ -396,45 +427,72 @@ func (r *ForeignClusterReconciler) checkIncomingPeeringStatus(ctx context.Contex
 	remoteClusterID := foreignCluster.Spec.ClusterIdentity.ClusterID
 	localNamespace := foreignCluster.Status.TenantNamespace.Local
 
-	var incomingResourceRequestList discoveryv1alpha1.ResourceRequestList
-	if err := r.Client.List(ctx, &incomingResourceRequestList, client.HasLabels{
-		liqoconst.ReplicationStatusLabel}, client.MatchingLabels{
-		liqoconst.ReplicationOriginLabel: remoteClusterID,
-	}); err != nil {
-		klog.Error(err)
-		return err
+	incomingResourceRequest, err := resourcerequestoperator.GetResourceRequest(ctx, r.Client, remoteClusterID)
+	if err != nil {
+		return fmt.Errorf("reading resource requests: %w", err)
 	}
 
-	status, reason, message, err := getPeeringPhaseList(foreignCluster, &incomingResourceRequestList)
+	resourceOffer, err := r.getIncomingResourceOffer(ctx, foreignCluster)
 	if err != nil {
-		err = fmt.Errorf("[%v] %w in namespace %v", remoteClusterID, err, localNamespace)
-		klog.Error(err)
-		return err
+		return fmt.Errorf("reading resource offers: %w", err)
+	}
+
+	status, reason, message, err := getPeeringPhase(foreignCluster, incomingResourceRequest, resourceOffer)
+	if err != nil {
+		return fmt.Errorf("reading peering phase from namespace %s: %w", localNamespace, err)
 	}
 	peeringconditionsutils.EnsureStatus(foreignCluster,
 		discoveryv1alpha1.IncomingPeeringCondition, status, reason, message)
 	return nil
 }
 
-func getPeeringPhaseList(foreignCluster *discoveryv1alpha1.ForeignCluster,
-	resourceRequestList *discoveryv1alpha1.ResourceRequestList) (status discoveryv1alpha1.PeeringConditionStatusType,
-	reason, message string, err error) {
-	switch len(resourceRequestList.Items) {
+// getIncomingResourceOffer returns the ResourceOffer created for the given remote cluster in an incoming peering, or a
+// nil pointer if there is none.
+func (r *ForeignClusterReconciler) getIncomingResourceOffer(ctx context.Context,
+	foreignCluster *discoveryv1alpha1.ForeignCluster) (*sharingv1alpha1.ResourceOffer, error) {
+	return r.getResourceOfferWithLabels(ctx, []client.ListOption{client.MatchingLabels{
+		liqoconst.ReplicationRequestedLabel:   "true",
+		liqoconst.ReplicationDestinationLabel: foreignCluster.Spec.ClusterIdentity.ClusterID,
+	}})
+}
+
+// getOutgoingResourceOffer returns the ResourceOffer created by the given remote cluster in an outgoing peering, or a
+// nil pointer if there is none.
+func (r *ForeignClusterReconciler) getOutgoingResourceOffer(ctx context.Context,
+	foreignCluster *discoveryv1alpha1.ForeignCluster) (*sharingv1alpha1.ResourceOffer, error) {
+	return r.getResourceOfferWithLabels(ctx, []client.ListOption{client.HasLabels{
+		liqoconst.ReplicationStatusLabel}, client.MatchingLabels{
+		liqoconst.ReplicationOriginLabel: foreignCluster.Spec.ClusterIdentity.ClusterID,
+	}})
+}
+
+// getResourceOfferWithLabels returns the ResourceOffer with the given labels.
+func (r *ForeignClusterReconciler) getResourceOfferWithLabels(ctx context.Context,
+	labels []client.ListOption) (*sharingv1alpha1.ResourceOffer, error) {
+	var resourceOfferList sharingv1alpha1.ResourceOfferList
+	if err := r.Client.List(ctx, &resourceOfferList, labels...); err != nil {
+		return nil, err
+	}
+
+	switch len(resourceOfferList.Items) {
 	case 0:
-		return discoveryv1alpha1.PeeringConditionStatusNone, noResourceRequestReason,
-			fmt.Sprintf(noResourceRequestMessage, foreignCluster.Status.TenantNamespace.Local), nil
+		return nil, nil
 	case 1:
-		return getPeeringPhase(foreignCluster, &resourceRequestList.Items[0])
+		return &resourceOfferList.Items[0], nil
 	default:
-		err = fmt.Errorf("more than one resource request found")
-		return discoveryv1alpha1.PeeringConditionStatusNone, noResourceRequestReason,
-			fmt.Sprintf(noResourceRequestMessage, foreignCluster.Status.TenantNamespace.Local), err
+		return nil, fmt.Errorf("more than one resource offer found")
 	}
 }
 
 func getPeeringPhase(foreignCluster *discoveryv1alpha1.ForeignCluster,
-	resourceRequest *discoveryv1alpha1.ResourceRequest) (status discoveryv1alpha1.PeeringConditionStatusType,
+	resourceRequest *discoveryv1alpha1.ResourceRequest,
+	resourceOffer *sharingv1alpha1.ResourceOffer) (status discoveryv1alpha1.PeeringConditionStatusType,
 	reason, message string, err error) {
+	if resourceRequest == nil {
+		return discoveryv1alpha1.PeeringConditionStatusNone, noResourceRequestReason,
+			fmt.Sprintf(noResourceRequestMessage, foreignCluster.Status.TenantNamespace.Local), nil
+	}
+
 	desiredDelete := !resourceRequest.Spec.WithdrawalTimestamp.IsZero()
 	deleted := !resourceRequest.Status.OfferWithdrawalTimestamp.IsZero()
 	offerState := resourceRequest.Status.OfferState
@@ -450,6 +508,15 @@ func getPeeringPhase(foreignCluster *discoveryv1alpha1.ForeignCluster,
 		if desiredDelete || deleted {
 			return discoveryv1alpha1.PeeringConditionStatusDisconnecting, resourceRequestDeletingReason,
 				fmt.Sprintf(resourceRequestDeletingMessage, foreignCluster.Status.TenantNamespace.Local), nil
+		}
+		// Return "pending" if we sent the ResourceRequest but the foreign cluster did not yet create the ResourceOffer
+		if resourceOffer == nil {
+			return discoveryv1alpha1.PeeringConditionStatusPending, resourceRequestPendingReason,
+				fmt.Sprintf(resourceRequestPendingMessage, foreignCluster.Status.TenantNamespace.Local), nil
+		}
+		if resourceOffer.Status.VirtualKubeletStatus != sharingv1alpha1.VirtualKubeletStatusCreated {
+			return discoveryv1alpha1.PeeringConditionStatusPending, virtualKubeletPendingReason,
+				virtualKubeletPendingMessage, nil
 		}
 		return discoveryv1alpha1.PeeringConditionStatusEstablished, resourceRequestAcceptedReason,
 			fmt.Sprintf(resourceRequestAcceptedMessage, foreignCluster.Status.TenantNamespace.Local), nil
@@ -467,15 +534,18 @@ func (r *ForeignClusterReconciler) checkNetwork(ctx context.Context,
 	foreignCluster *discoveryv1alpha1.ForeignCluster) error {
 	// local NetworkConfig
 	labelSelector := map[string]string{liqoconst.ReplicationDestinationLabel: foreignCluster.Spec.ClusterIdentity.ClusterID}
-	if err := r.updateNetwork(ctx,
+	if established, err := r.updateNetwork(ctx,
 		labelSelector, foreignCluster, discoveryv1alpha1.NetworkStatusCondition); err != nil {
 		klog.Error(err)
 		return err
+	} else if !established {
+		// Given the first network config is not ready, it is not necessary to check the second
+		return nil
 	}
 
 	// remote NetworkConfig
 	labelSelector = map[string]string{liqoconst.ReplicationOriginLabel: foreignCluster.Spec.ClusterIdentity.ClusterID}
-	if err := r.updateNetwork(ctx, labelSelector, foreignCluster, discoveryv1alpha1.NetworkStatusCondition); err != nil {
+	if _, err := r.updateNetwork(ctx, labelSelector, foreignCluster, discoveryv1alpha1.NetworkStatusCondition); err != nil {
 		klog.Error(err)
 		return err
 	}
@@ -485,11 +555,11 @@ func (r *ForeignClusterReconciler) checkNetwork(ctx context.Context,
 
 func (r *ForeignClusterReconciler) updateNetwork(ctx context.Context,
 	labelSelector map[string]string, foreignCluster *discoveryv1alpha1.ForeignCluster,
-	conditionType discoveryv1alpha1.PeeringConditionType) error {
+	conditionType discoveryv1alpha1.PeeringConditionType) (established bool, err error) {
 	var netList netv1alpha1.NetworkConfigList
-	if err := r.Client.List(ctx, &netList, client.MatchingLabels(labelSelector)); err != nil {
+	if err = r.Client.List(ctx, &netList, client.MatchingLabels(labelSelector)); err != nil {
 		klog.Error(err)
-		return err
+		return false, err
 	}
 	if len(netList.Items) == 0 {
 		// no NetworkConfigs found
@@ -500,6 +570,7 @@ func (r *ForeignClusterReconciler) updateNetwork(ctx context.Context,
 		// there are NetworkConfigs
 		ncf := &netList.Items[0]
 		if ncf.Status.Processed {
+			established = true
 			peeringconditionsutils.EnsureStatus(foreignCluster,
 				conditionType, discoveryv1alpha1.PeeringConditionStatusEstablished,
 				networkConfigAvailableReason, fmt.Sprintf(networkConfigAvailableMessage, foreignCluster.Status.TenantNamespace.Local))
@@ -509,7 +580,7 @@ func (r *ForeignClusterReconciler) updateNetwork(ctx context.Context,
 				networkConfigPendingReason, fmt.Sprintf(networkConfigPendingMessage, foreignCluster.Status.TenantNamespace.Local))
 		}
 	}
-	return nil
+	return established, nil
 }
 
 func (r *ForeignClusterReconciler) checkTEP(ctx context.Context,

@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -270,13 +270,16 @@ var _ = Describe("Discovery", func() {
 		BeforeEach(func() {
 			ctx = context.Background()
 
-			cID := "local-cluster"
+			clusterIdentity := discoveryv1alpha1.ClusterIdentity{
+				ClusterID:   "local-cluster-id",
+				ClusterName: "local-cluster-name",
+			}
 
 			client := fake.NewClientBuilder().WithScheme(scheme.Scheme).Build()
 			discoveryCtrl = Controller{
 				Client:           client,
 				namespacedClient: client,
-				LocalClusterID:   cID,
+				LocalCluster:     clusterIdentity,
 				namespace:        "default",
 				mdnsConfig: MDNSConfig{
 					Service:             "_liqo_auth._tcp",
@@ -321,7 +324,7 @@ var _ = Describe("Discovery", func() {
 						data: discoveryData{
 							AuthData: NewAuthData("1.2.3.4", 1234, 30),
 							ClusterInfo: &auth.ClusterInfo{
-								ClusterID:   "local-cluster",
+								ClusterID:   "local-cluster-id",
 								ClusterName: "ClusterTest1",
 							},
 						},

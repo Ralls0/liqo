@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -27,7 +27,6 @@ import (
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	liqoerrors "github.com/liqotech/liqo/pkg/liqonet/errors"
 	"github.com/liqotech/liqo/pkg/liqonet/overlay"
@@ -87,7 +86,7 @@ func (src *SymmetricRoutingController) Reconcile(ctx context.Context, req ctrl.R
 		return ctrl.Result{}, err
 	}
 	if added {
-		klog.Errorf("successfully added route for pod {%s} with IP address {%s} to the vxlan device {%s}",
+		klog.Infof("successfully added route for pod {%s} with IP address {%s} to the vxlan device {%s}",
 			req.String(), p.Status.PodIP, src.vxlanDev.Link.Name)
 	}
 	return ctrl.Result{}, nil
@@ -129,7 +128,7 @@ func (src *SymmetricRoutingController) addRoute(req ctrl.Request, p *corev1.Pod)
 	}
 	gwIP := utils.GetOverlayIP(nodeIP)
 	dstNet := strings.Join([]string{p.Status.PodIP, "32"}, "/")
-	added, err := routing.AddRoute(dstNet, gwIP, src.vxlanDev.Link.Attrs().Index, src.routingTableID)
+	added, err := routing.AddRoute(dstNet, gwIP, src.vxlanDev.Link.Attrs().Index, src.routingTableID, routing.DefaultFlags, routing.DefaultScope)
 	if err != nil {
 		return added, err
 	}
@@ -153,32 +152,9 @@ func (src *SymmetricRoutingController) delRoute(req ctrl.Request) (bool, error) 
 	return deleted, nil
 }
 
-// podFilter used to filter out all the pods that are running on the same node
-// as the operator or pods that are not ready. We do not need to configure routes
-// for pods running on same node.
-func (src *SymmetricRoutingController) podFilter(obj client.Object) bool {
-	// Check if the object is a pod.
-	p, ok := obj.(*corev1.Pod)
-	if !ok {
-		klog.Infof("object {%s} is not of type corev1.Pod", obj.GetName())
-		return false
-	}
-	// If podIP is not set return false.
-	// Here the newly created pods scheduled on a virtual node will be skipped. It is a temporary situation untile
-	// the pods are labeled. The filtered cache for all the pods scheduled on a virtual node works only when the correct
-	// label has been added to the pod. When pods are created the label is not present, but we are sure that it will be
-	// added before the IP address for the same pod is set.
-	// Once the pods have been labeled they are filtered out at the cache level by the client.
-	if p.Status.PodIP == "" {
-		klog.V(infoLogLevel).Infof("skipping pod {%s} running on node {%s} has ip address set to empty", p.Name, p.Spec.NodeName)
-		return false
-	}
-	return true
-}
-
 // SetupWithManager used to set up the controller with a given manager.
 func (src *SymmetricRoutingController) SetupWithManager(mgr ctrl.Manager) error {
-	p := predicate.NewPredicateFuncs(src.podFilter)
-	return ctrl.NewControllerManagedBy(mgr).For(&corev1.Pod{}).WithEventFilter(p).
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&corev1.Pod{}).
 		Complete(src)
 }

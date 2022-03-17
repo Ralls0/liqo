@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -98,7 +98,11 @@ func (ner *NamespacedEndpointSliceReflector) Handle(ctx context.Context, name st
 
 	// Abort the reflection if the remote object is not managed by us, as we do not want to mutate others' objects.
 	if rerr == nil && (!forge.IsReflected(remote) || !forge.IsEndpointSliceManagedByReflection(remote)) {
-		klog.Infof("Skipping reflection of local EndpointSlice %q as remote already exists and is not managed by us", ner.LocalRef(name))
+		// Prevent misleading warnings triggered by remote non-reflected endpointslices, since they inherit
+		// the labels from the service. Hence, vanilla remote endpointslices do also trigger the Handle function.
+		if lerr == nil {
+			klog.Infof("Skipping reflection of local EndpointSlice %q as remote already exists and is not managed by us", ner.LocalRef(name))
+		}
 		return nil
 	}
 	tracer.Step("Performed the sanity checks")

@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ package conflictremotenamespace
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,6 +31,7 @@ import (
 
 	offloadingv1alpha1 "github.com/liqotech/liqo/apis/offloading/v1alpha1"
 	liqoconst "github.com/liqotech/liqo/pkg/consts"
+	foreignclusterutils "github.com/liqotech/liqo/pkg/utils/foreignCluster"
 	"github.com/liqotech/liqo/test/e2e/testutils/tester"
 	"github.com/liqotech/liqo/test/e2e/testutils/util"
 )
@@ -60,8 +62,8 @@ var _ = Describe("Liqo E2E", func() {
 		localIndex  = 0
 		// index of the cluster on which a remote namespace with the same name already exists.
 		remoteIndex             = 2
-		localClusterID          = testContext.Clusters[localIndex].ClusterID
-		remoteTestNamespaceName = fmt.Sprintf("%s-%s", testNamespaceName, localClusterID)
+		localCluster            = testContext.Clusters[localIndex].Cluster
+		remoteTestNamespaceName = fmt.Sprintf("%s-%s", testNamespaceName, localCluster.ClusterID)
 	)
 
 	Context(fmt.Sprintf("Create a namespace inside the cluster '%d' and check what happen if a remote namespaace in the cluster "+
@@ -75,7 +77,7 @@ var _ = Describe("Liqo E2E", func() {
 			By(fmt.Sprintf(" 1 - Creating the remote namespace inside the cluster '%d'", remoteIndex))
 			Eventually(func() error {
 				_, err := util.EnforceNamespace(ctx, testContext.Clusters[remoteIndex].NativeClient,
-					testContext.Clusters[remoteIndex].ClusterID, remoteTestNamespaceName,
+					testContext.Clusters[remoteIndex].Cluster, remoteTestNamespaceName,
 					util.GetNamespaceLabel(false))
 				return err
 			}, timeout, interval).Should(BeNil())
@@ -83,7 +85,7 @@ var _ = Describe("Liqo E2E", func() {
 			By(fmt.Sprintf(" 2 - Creating the local namespace inside the cluster '%d'", localIndex))
 			Eventually(func() error {
 				_, err := util.EnforceNamespace(ctx, testContext.Clusters[localIndex].NativeClient,
-					testContext.Clusters[localIndex].ClusterID, testNamespaceName,
+					testContext.Clusters[localIndex].Cluster, testNamespaceName,
 					util.GetNamespaceLabel(true))
 				return err
 			}, timeout, interval).Should(BeNil())
@@ -119,7 +121,8 @@ var _ = Describe("Liqo E2E", func() {
 					types.NamespacedName{Name: remoteTestNamespaceName}, namespace); err != nil {
 					return err
 				}
-				if value, ok := namespace.Annotations[liqoconst.RemoteNamespaceAnnotationKey]; !ok || value != localClusterID {
+				value, ok := namespace.Annotations[liqoconst.RemoteNamespaceManagedByAnnotationKey]
+				if !ok || strings.HasSuffix(value, foreignclusterutils.UniqueName(&testContext.Clusters[remoteIndex].Cluster)) {
 					return fmt.Errorf("the remote namespace has not the right Liqo annotation")
 				}
 				return nil

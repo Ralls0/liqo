@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,7 +22,6 @@ import (
 	"strconv"
 	"strings"
 
-	capsulev1alpha1 "github.com/clastix/capsule/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -35,6 +34,7 @@ import (
 	offv1alpha1 "github.com/liqotech/liqo/apis/offloading/v1alpha1"
 	sharingv1alpha1 "github.com/liqotech/liqo/apis/sharing/v1alpha1"
 	virtualKubeletv1alpha1 "github.com/liqotech/liqo/apis/virtualkubelet/v1alpha1"
+	"github.com/liqotech/liqo/pkg/utils"
 	"github.com/liqotech/liqo/test/e2e/testconsts"
 	testutils "github.com/liqotech/liqo/test/e2e/testutils/util"
 )
@@ -53,7 +53,7 @@ type ClusterContext struct {
 	Config           *rest.Config
 	NativeClient     *kubernetes.Clientset
 	ControllerClient client.Client
-	ClusterID        string
+	Cluster          discoveryv1alpha1.ClusterIdentity
 	KubeconfigPath   string
 	HomeCluster      bool
 }
@@ -129,7 +129,7 @@ func createTester(ctx context.Context, ignoreClusterIDError bool) (*Tester, erro
 			HomeCluster:    i == 1,
 		}
 		c.NativeClient = kubernetes.NewForConfigOrDie(c.Config)
-		c.ClusterID, err = testutils.GetClusterID(ctx, c.NativeClient, namespace)
+		c.Cluster, err = utils.GetClusterIdentityWithNativeClient(ctx, c.NativeClient, namespace)
 		if err != nil && !ignoreClusterIDError {
 			return nil, err
 		}
@@ -162,6 +162,5 @@ func getScheme() *runtime.Scheme {
 	_ = netv1alpha1.AddToScheme(scheme)
 	_ = sharingv1alpha1.AddToScheme(scheme)
 	_ = virtualKubeletv1alpha1.AddToScheme(scheme)
-	_ = capsulev1alpha1.AddToScheme(scheme)
 	return scheme
 }

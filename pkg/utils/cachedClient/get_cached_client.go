@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ package cachedclient
 import (
 	"context"
 	"fmt"
+	"reflect"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
@@ -27,13 +28,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/cluster"
 
-	"github.com/liqotech/liqo/pkg/mapperUtils"
+	"github.com/liqotech/liqo/pkg/utils/mapper"
 )
 
 // GetCachedClient returns a controller runtime client with the cache initialized only for the resources added to
 // the scheme. The necessary rest.Config is generated inside this function.
 func GetCachedClient(ctx context.Context, scheme *runtime.Scheme) (client.Client, error) {
-
 	conf := ctrl.GetConfigOrDie()
 	if conf == nil {
 		err := fmt.Errorf("unable to get the config file")
@@ -41,28 +41,31 @@ func GetCachedClient(ctx context.Context, scheme *runtime.Scheme) (client.Client
 		return nil, err
 	}
 
-	return GetCachedClientWithConfig(ctx, scheme, conf)
+	return GetCachedClientWithConfig(ctx, scheme, conf, nil)
 }
 
 // GetCachedClientWithConfig returns a controller runtime client with the cache initialized only for the resources added to
 // the scheme. The necessary rest.Config is passed as third parameter, it must not be nil.
-func GetCachedClientWithConfig(ctx context.Context, scheme *runtime.Scheme, conf *rest.Config) (client.Client, error) {
+func GetCachedClientWithConfig(ctx context.Context,
+	scheme *runtime.Scheme, conf *rest.Config, clientCache cache.Cache) (client.Client, error) {
 	if conf == nil {
 		err := fmt.Errorf("the rest.Config parameter is nil")
 		klog.Error(err)
 		return nil, err
 	}
 
-	mapper, err := (mapperUtils.LiqoMapperProvider(scheme))(conf)
+	liqoMapper, err := (mapper.LiqoMapperProvider(scheme))(conf)
 	if err != nil {
 		klog.Errorf("mapper: %s", err)
 		return nil, err
 	}
 
-	clientCache, err := cache.New(conf, cache.Options{Scheme: scheme, Mapper: mapper})
-	if err != nil {
-		klog.Errorf("cache: %s", err)
-		return nil, err
+	if clientCache == nil || reflect.ValueOf(clientCache).IsNil() {
+		clientCache, err = cache.New(conf, cache.Options{Scheme: scheme, Mapper: liqoMapper})
+		if err != nil {
+			klog.Errorf("cache: %s", err)
+			return nil, err
+		}
 	}
 
 	go func() {
@@ -71,7 +74,7 @@ func GetCachedClientWithConfig(ctx context.Context, scheme *runtime.Scheme, conf
 		}
 	}()
 
-	newClient, err := cluster.DefaultNewClient(clientCache, conf, client.Options{Scheme: scheme, Mapper: mapper})
+	newClient, err := cluster.DefaultNewClient(clientCache, conf, client.Options{Scheme: scheme, Mapper: liqoMapper})
 	if err != nil {
 		klog.Errorf("unable to create the client: %s", err)
 		return nil, err

@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -29,9 +29,10 @@ func newGenerateAddCommand(ctx context.Context) *cobra.Command {
 	var liqoNamespace string
 	var onlyCommand bool
 	var addCmd = &cobra.Command{
-		Use:   generate.LiqoctlGenerateAddCommand,
-		Short: generate.LiqoctlGenerateShortHelp,
-		Long:  generate.LiqoctlGenerateLongHelp,
+		Use:          generate.LiqoctlGenerateAddCommand,
+		Short:        generate.LiqoctlGenerateShortHelp,
+		Long:         generate.LiqoctlGenerateLongHelp,
+		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return generate.HandleGenerateAddCommand(ctx, liqoNamespace, onlyCommand, os.Args[0])
 		},

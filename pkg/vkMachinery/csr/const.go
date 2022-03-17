@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,8 +17,7 @@ package csr
 const (
 	kubeletServingSignerName    = "kubernetes.io/kubelet-serving"
 	kubeletAPIServingSignerName = "kubernetes.io/kube-apiserver-client-kubelet"
-)
-
-const (
-	csrSecretLabel = "liqo.io/virtual-kubelet-csr-secret" // nolint:gosec // not a credential
+	csrSecretLabel              = "liqo.io/virtual-kubelet-csr-secret" // nolint:gosec // not a credential
+	csrNodeGroup                = "system:nodes"
+	csrNodeGroupMember          = "system:node:"
 )

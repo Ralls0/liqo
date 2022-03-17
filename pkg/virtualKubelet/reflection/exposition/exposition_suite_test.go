@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,7 +16,6 @@ package exposition_test
 
 import (
 	"context"
-	"flag"
 	"testing"
 
 	. "github.com/onsi/ginkgo"
@@ -25,9 +24,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
+	"github.com/liqotech/liqo/pkg/utils/testutil"
 	"github.com/liqotech/liqo/pkg/virtualKubelet/forge"
 	"github.com/liqotech/liqo/pkg/virtualKubelet/reflection/options"
 )
@@ -38,6 +37,9 @@ const (
 
 	LocalClusterID  = "local-cluster"
 	RemoteClusterID = "remote-cluster"
+
+	LiqoNodeName = "local-node"
+	LiqoNodeIP   = "1.1.1.1"
 )
 
 var (
@@ -54,13 +56,9 @@ func TestService(t *testing.T) {
 }
 
 var _ = BeforeSuite(func() {
-	klog.SetOutput(GinkgoWriter)
-	flagset := flag.NewFlagSet("klog", flag.PanicOnError)
-	klog.InitFlags(flagset)
-	Expect(flagset.Set("v", "4")).To(Succeed())
-	klog.LogToStderr(false)
+	testutil.LogsToGinkgoWriter()
 
-	ctx, cancel = context.WithCancel(context.Background())
+	ctx := context.Background()
 
 	testEnv = envtest.Environment{}
 	cfg, err := testEnv.Start()
@@ -73,13 +71,13 @@ var _ = BeforeSuite(func() {
 	_, err = client.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: RemoteNamespace}}, metav1.CreateOptions{})
 	Expect(err).ToNot(HaveOccurred())
 
-	forge.LocalClusterID = LocalClusterID
-	forge.RemoteClusterID = RemoteClusterID
-	forge.LiqoNodeName = func() string { return "liqo-node" }
+	forge.Init(LocalClusterID, RemoteClusterID, LiqoNodeName, LiqoNodeIP)
 })
 
+var _ = BeforeEach(func() { ctx, cancel = context.WithCancel(context.Background()) })
+var _ = AfterEach(func() { cancel() })
+
 var _ = AfterSuite(func() {
-	cancel()
 	Expect(testEnv.Stop()).To(Succeed())
 })
 

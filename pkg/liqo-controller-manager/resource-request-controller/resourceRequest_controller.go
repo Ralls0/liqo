@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -33,15 +33,11 @@ import (
 // ResourceRequestReconciler reconciles a ResourceRequest object.
 type ResourceRequestReconciler struct {
 	client.Client
-	Scheme                *runtime.Scheme
-	ClusterID             string
-	Broadcaster           *Broadcaster
+	Scheme      *runtime.Scheme
+	HomeCluster discoveryv1alpha1.ClusterIdentity
+	*OfferUpdater
 	EnableIncomingPeering bool
 }
-
-const (
-	offerPrefix = "resourceoffer-"
-)
 
 // +kubebuilder:rbac:groups=sharing.liqo.io,resources=resourceoffers,verbs=get;list;watch;create;update;patch;
 // +kubebuilder:rbac:groups=sharing.liqo.io,resources=resourceoffers/status,verbs=get;update;patch
@@ -49,8 +45,9 @@ const (
 // +kubebuilder:rbac:groups=discovery.liqo.io,resources=resourcerequests/status;resourcerequests/finalizers,verbs=get;update;patch
 // +kubebuilder:rbac:groups=discovery.liqo.io,resources=foreignclusters,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=discovery.liqo.io,resources=foreignclusters/status;foreignclusters/finalizers,verbs=get;update;patch
+// +kubebuilder:rbac:groups=metrics.liqo.io,resources=scrape;scrape/metrics,verbs=get
 
-// +kubebuilder:rbac:groups=capsule.clastix.io,resources=tenants,verbs=get;list;watch;create;update;patch;delete;
+// +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch
 
 // Reconcile is the main function of the controller which reconciles ResourceRequest resources.
 func (r *ResourceRequestReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, err error) {
@@ -61,43 +58,51 @@ func (r *ResourceRequestReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, nil
 	}
 
-	remoteClusterID := resourceRequest.Spec.ClusterIdentity.ClusterID
+	remoteCluster := resourceRequest.Spec.ClusterIdentity
 
 	// ensure the ForeignCluster existence, if not exists we have to add a new one
 	// with IncomingPeering discovery method.
 	foreignCluster, err := r.ensureForeignCluster(ctx, &resourceRequest)
 	if err != nil {
-		klog.Errorf("%s -> Error generating resourceOffer: %s", remoteClusterID, err)
+		klog.Errorf("%s -> Error generating resourceOffer: %s", remoteCluster.ClusterName, err)
 		return ctrl.Result{}, err
 	}
 
 	// ensure that the ResourceRequest is controlled by a ForeignCluster
 	requireSpecUpdate, err := r.ensureControllerReference(foreignCluster, &resourceRequest)
 	if err != nil {
-		klog.Errorf("%s -> Error ensuring the controller reference presence: %s", remoteClusterID, err)
+		klog.Errorf("%s -> Error ensuring the controller reference presence: %s", remoteCluster.ClusterName, err)
 		return ctrl.Result{}, err
 	}
 
 	var resourceReqPhase resourceRequestPhase
 	resourceReqPhase, err = r.getResourceRequestPhase(foreignCluster, &resourceRequest)
 	if err != nil {
-		klog.Errorf("%s -> Error getting the ResourceRequest Phase: %s", remoteClusterID, err)
+		klog.Errorf("%s -> Error getting the ResourceRequest Phase: %s", remoteCluster.ClusterName, err)
 		return ctrl.Result{}, err
 	}
 
 	newRequireSpecUpdate := false
-	// ensure creation and deletion of the Capsule Tenant for the remote cluster
+	// ensure creation and deletion of the ClusterRole and the ClusterRoleBinding for the remote cluster
 	switch resourceReqPhase {
 	case deletingResourceRequestPhase, denyResourceRequestPhase:
-		// the local cluster does not allow the peering, ensure the Tenant deletion
-		if newRequireSpecUpdate, err = r.ensureTenantDeletion(ctx, &resourceRequest); err != nil {
-			klog.Errorf("%s -> Error deleting Tenant: %s", remoteClusterID, err)
+		// the local cluster does not allow the peering, ensure the permission deletion
+		if err = r.deleteClusterRoleBinding(ctx, remoteCluster); err != nil {
+			klog.Errorf("%s -> Error deleting ClusterRoleBinding: %s", remoteCluster.ClusterName, err)
+			return ctrl.Result{}, err
+		}
+		if err = r.deleteClusterRole(ctx, remoteCluster); err != nil {
+			klog.Errorf("%s -> Error deleting ClusterRole: %s", remoteCluster.ClusterName, err)
 			return ctrl.Result{}, err
 		}
 	case allowResourceRequestPhase:
-		// the local cluster allows the peering, ensure the Tenant creation
-		if newRequireSpecUpdate, err = r.ensureTenant(ctx, &resourceRequest); err != nil {
-			klog.Errorf("%s -> Error creating Tenant: %s", remoteClusterID, err)
+		// the local cluster allows the peering, ensure the permission
+		if err = r.ensureClusterRole(ctx, remoteCluster); err != nil {
+			klog.Errorf("%s -> Error creating ClusterRole: %s", remoteCluster.ClusterName, err)
+			return ctrl.Result{}, err
+		}
+		if err = r.ensureClusterRoleBinding(ctx, remoteCluster); err != nil {
+			klog.Errorf("%s -> Error creating ClusterRoleBinding: %s", remoteCluster.ClusterName, err)
 			return ctrl.Result{}, err
 		}
 	}
@@ -113,10 +118,13 @@ func (r *ResourceRequestReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	defer func() {
-		newErr := r.Client.Status().Update(ctx, &resourceRequest)
-		if newErr != nil {
-			klog.Error(newErr)
-			err = newErr
+		if err != nil {
+			return
+		}
+
+		err = r.Client.Status().Update(ctx, &resourceRequest)
+		if err != nil {
+			klog.Error(err)
 		}
 	}()
 
@@ -124,13 +132,17 @@ func (r *ResourceRequestReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	switch resourceReqPhase {
 	case allowResourceRequestPhase:
 		// ensure that we are offering resources to this remote cluster
-		r.Broadcaster.enqueueForCreationOrUpdate(remoteClusterID)
+		_, err = r.OfferUpdater.CreateOrUpdateOffer(remoteCluster) // don't care about requeue: the controller will requeue anyway
+		if err != nil {
+			klog.Errorf("Error creating a ResourceOffer: %s", err)
+			return ctrl.Result{}, err
+		}
 		resourceRequest.Status.OfferWithdrawalTimestamp = nil
 	case denyResourceRequestPhase, deletingResourceRequestPhase:
 		// ensure to invalidate any resource offered to the remote cluster
 		err = r.invalidateResourceOffer(ctx, &resourceRequest)
 		if err != nil {
-			klog.Errorf("%s -> Error invalidating resourceOffer: %s", remoteClusterID, err)
+			klog.Errorf("%s -> Error invalidating resourceOffer: %s", remoteCluster.ClusterName, err)
 			return ctrl.Result{}, err
 		}
 	}

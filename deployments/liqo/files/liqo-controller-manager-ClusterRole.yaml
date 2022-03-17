@@ -26,8 +26,12 @@ rules:
   resources:
   - namespaces
   verbs:
+  - create
+  - delete
   - get
   - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - ""
@@ -154,26 +158,6 @@ rules:
   - get
   - list
   - watch
-- apiGroups:
-  - capsule.clastix.io
-  resources:
-  - tenants
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - capsule.clastix.io
-  resources:
-  - tenants/finalizers
-  verbs:
-  - get
-  - patch
-  - update
 - apiGroups:
   - certificates.k8s.io
   resources:
@@ -367,6 +351,13 @@ rules:
   - patch
   - update
 - apiGroups:
+  - metrics.liqo.io
+  resources:
+  - scrape
+  - scrape/metrics
+  verbs:
+  - get
+- apiGroups:
   - net.liqo.io
   resources:
   - networkconfigs
@@ -438,6 +429,10 @@ rules:
   - delete
   - deletecollection
   - get
+  - list
+  - patch
+  - update
+  - watch
 - apiGroups:
   - sharing.liqo.io
   resources:
@@ -522,4 +517,12 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - virtualkubelet.liqo.io
+  resources:
+  - shadowpods/finalizers
+  verbs:
+  - get
+  - patch
+  - update
 

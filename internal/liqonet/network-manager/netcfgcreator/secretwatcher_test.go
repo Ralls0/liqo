@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,7 +24,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/workqueue"
 
-	"github.com/liqotech/liqo/pkg/liqonet/tunnel/wireguard"
+	"github.com/liqotech/liqo/pkg/consts"
 )
 
 var _ = Describe("Secret Watcher functions", func() {
@@ -48,7 +48,7 @@ var _ = Describe("Secret Watcher functions", func() {
 
 		When("given a valid secret", func() {
 			BeforeEach(func() {
-				secret.Data = map[string][]byte{wireguard.PublicKey: []byte(key)}
+				secret.Data = map[string][]byte{consts.PublicKey: []byte(key)}
 			})
 
 			When("not yet initialized", func() {

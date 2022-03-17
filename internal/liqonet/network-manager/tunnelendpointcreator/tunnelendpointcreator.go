@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Liqo Authors
+// Copyright 2019-2022 The Liqo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -32,7 +32,10 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
+	discoveryv1alpha1 "github.com/liqotech/liqo/apis/discovery/v1alpha1"
 	netv1alpha1 "github.com/liqotech/liqo/apis/net/v1alpha1"
 	"github.com/liqotech/liqo/internal/liqonet/network-manager/netcfgcreator"
 	liqoconst "github.com/liqotech/liqo/pkg/consts"
@@ -43,12 +46,8 @@ import (
 	traceutils "github.com/liqotech/liqo/pkg/utils/trace"
 )
 
-const (
-	tunEndpointNamePrefix = "tun-endpoint-"
-)
-
 type networkParam struct {
-	remoteClusterID       string
+	remoteCluster         discoveryv1alpha1.ClusterIdentity
 	remoteEndpointIP      string
 	remotePodCIDR         string
 	remoteNatPodCIDR      string
@@ -127,8 +126,8 @@ func (tec *TunnelEndpointCreator) Reconcile(ctx context.Context, req ctrl.Reques
 		// The object is being deleted
 		if controllerutil.ContainsFinalizer(&netConfig, tunnelEndpointCreatorFinalizer) {
 			// Remove IPAM configuration per cluster
-			if err := tec.IPManager.RemoveClusterConfig(netConfig.Spec.ClusterID); err != nil {
-				klog.Errorf("cannot delete local subnets assigned to cluster %s: %s", netConfig.Spec.ClusterID, err.Error())
+			if err := tec.IPManager.RemoveClusterConfig(netConfig.Spec.RemoteCluster.ClusterID); err != nil {
+				klog.Errorf("cannot delete local subnets assigned to cluster %s: %s", netConfig.Spec.RemoteCluster, err.Error())
 				return ctrl.Result{}, err
 			}
 			// Remove TunnelEndpoint resource relative to this NetworkConfig
@@ -150,7 +149,7 @@ func (tec *TunnelEndpointCreator) Reconcile(ctx context.Context, req ctrl.Reques
 	var clusterID string
 	if val, ok := netConfig.GetLabels()[liqoconst.ReplicationRequestedLabel]; ok && val == "true" {
 		// This is a local NetworkConfig
-		clusterID = netConfig.Spec.ClusterID
+		clusterID = netConfig.Spec.RemoteCluster.ClusterID
 	} else if cid, ok := netConfig.GetLabels()[liqoconst.ReplicationOriginLabel]; ok {
 		// This is a remote NetworkConfig
 		// the cluster ID in the spec is the one of the destination cluster (the local cluster in this case)
@@ -168,6 +167,8 @@ func (tec *TunnelEndpointCreator) Reconcile(ctx context.Context, req ctrl.Reques
 func (tec *TunnelEndpointCreator) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&netv1alpha1.NetworkConfig{}).
+		Watches(&source.Kind{Type: &netv1alpha1.TunnelEndpoint{}},
+			&handler.EnqueueRequestForOwner{OwnerType: &netv1alpha1.NetworkConfig{}, IsController: false}).
 		Complete(tec)
 }
 
@@ -219,7 +220,7 @@ func (tec *TunnelEndpointCreator) processNetworkConfig(ctx context.Context, clus
 	tracer.Step("Remote NetworkConfig status enforcement")
 
 	// Get the NetworkConfig created by the local cluster.
-	local, err := netcfgcreator.GetLocalNetworkConfig(ctx, tec.Client, clusterID, namespace)
+	local, err := netcfgcreator.GetLocalNetworkConfig(ctx, tec.Client, nil, clusterID, namespace)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			klog.V(4).Infof("No local NetworkConfig for cluster %v found yet", clusterID)
@@ -239,7 +240,7 @@ func (tec *TunnelEndpointCreator) processNetworkConfig(ctx context.Context, clus
 	}
 
 	if err := tec.IPManager.AddLocalSubnetsPerCluster(local.Status.PodCIDRNAT, local.Status.ExternalCIDRNAT, clusterID); err != nil {
-		klog.Errorf("Failed to add local subnets to IPAM for cluster %v: %v", local.Spec.ClusterID, err)
+		klog.Errorf("Failed to add local subnets to IPAM for cluster %s: %v", local.Spec.RemoteCluster, err)
 		return err
 	}
 	tracer.Step("IPAM configuration")
@@ -255,9 +256,15 @@ func (tec *TunnelEndpointCreator) enforceRemoteNetConfigMeta(ctx context.Context
 	// to be triggered and reconcile its status when this NetworkConfig changes.
 	if utils.GetOwnerByKind(&netcfg.OwnerReferences, "ForeignCluster") == nil {
 		fc, err := foreignclusterutils.GetForeignClusterByID(ctx, tec.Client, clusterID)
-		if err != nil {
+		if client.IgnoreNotFound(err) != nil {
 			klog.Errorf("Failed to retrieve ForeignCluster associated with NetworkConfig %q: %v", klog.KObj(netcfg), err)
 			return err
+		}
+
+		// It could happen that the networkconfig is created before the foreigncluster.
+		if err != nil {
+			klog.V(4).Infof("Failed to retrieve ForeignCluster associated with NetworkConfig %q: %v", klog.KObj(netcfg), err)
+			return nil
 		}
 
 		utilruntime.Must(controllerutil.SetOwnerReference(fc, netcfg, tec.Scheme))
@@ -312,7 +319,7 @@ func (tec *TunnelEndpointCreator) enforceTunnelEndpoint(ctx context.Context, loc
 
 	// At this point we have all the necessary parameters to create the tunnelEndpoint resource
 	param := &networkParam{
-		remoteClusterID:       local.Spec.ClusterID,
+		remoteCluster:         local.Spec.RemoteCluster,
 		remoteEndpointIP:      remote.Spec.EndpointIP,
 		remotePodCIDR:         remote.Spec.PodCIDR,
 		remoteNatPodCIDR:      remote.Status.PodCIDRNAT,
@@ -328,17 +335,18 @@ func (tec *TunnelEndpointCreator) enforceTunnelEndpoint(ctx context.Context, loc
 	}
 
 	// Try to get the tunnelEndpoint, which may not exist
-	_, found, err := tec.GetTunnelEndpoint(ctx, param.remoteClusterID, local.GetNamespace())
+	_, found, err := tec.GetTunnelEndpoint(ctx, param.remoteCluster.ClusterID, local.GetNamespace())
 	tracer.Step("TunnelEndpoint retrieval")
 	if err != nil {
-		klog.Errorf("an error occurred while getting resource tunnelEndpoint for cluster %s: %s", param.remoteClusterID, err)
+		klog.Errorf("an error occurred while getting resource tunnelEndpoint for cluster %s: %s",
+			param.remoteCluster, err)
 		return err
 	}
 
 	if !found {
 		controllerRef := metav1.GetControllerOf(local)
 		defer tracer.Step("TunnelEndpoint creation")
-		return tec.createTunnelEndpoint(ctx, param, controllerRef, local.GetNamespace())
+		return tec.createTunnelEndpoint(ctx, param, controllerRef, local.GetNamespace(), local)
 	}
 
 	defer tracer.Step("TunnelEndpoint update")
@@ -351,13 +359,13 @@ func (tec *TunnelEndpointCreator) updateSpecTunnelEndpoint(ctx context.Context, 
 	var err error
 	// here we recover from conflicting resource versions
 	retryError := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		tep, found, err = tec.GetTunnelEndpoint(ctx, param.remoteClusterID, namespace)
+		tep, found, err = tec.GetTunnelEndpoint(ctx, param.remoteCluster.ClusterID, namespace)
 		if err != nil {
 			return err
 		}
 		if !found {
 			return apierrors.NewNotFound(netv1alpha1.TunnelEndpointGroupResource,
-				strings.Join([]string{"tunnelEndpoint for cluster:", param.remoteClusterID}, " "))
+				strings.Join([]string{"tunnelEndpoint for cluster:", param.remoteCluster.ClusterID}, " "))
 		}
 
 		original := tep.Spec.DeepCopy()
@@ -378,35 +386,42 @@ func (tec *TunnelEndpointCreator) updateSpecTunnelEndpoint(ctx context.Context, 
 }
 
 func (tec *TunnelEndpointCreator) createTunnelEndpoint(ctx context.Context, param *networkParam,
-	ownerRef *metav1.OwnerReference, namespace string) error {
+	ownerRef *metav1.OwnerReference, namespace string, localNet *netv1alpha1.NetworkConfig) error {
 	// here we create it
 	tep := &netv1alpha1.TunnelEndpoint{
 		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: tunEndpointNamePrefix,
-			Namespace:    namespace,
+			Name:      foreignclusterutils.UniqueName(&param.remoteCluster),
+			Namespace: namespace,
 			Labels: map[string]string{
-				liqoconst.ClusterIDLabelName: param.remoteClusterID,
+				liqoconst.ClusterIDLabelName: param.remoteCluster.ClusterID,
 			},
 		},
 	}
+
+	if err := controllerutil.SetOwnerReference(localNet, tep, tec.Scheme); err != nil {
+		klog.Errorf("an error occurred while setting owner reference to resource %s: %v", tep.Name, err)
+		return err
+	}
+
 	if ownerRef != nil {
 		tep.OwnerReferences = append(tep.OwnerReferences, *ownerRef)
 	}
 
 	tec.fillTunnelEndpointSpec(tep, param)
-	err := tec.Create(ctx, tep)
-	if err != nil {
+
+	if err := tec.Create(ctx, tep); err != nil {
 		klog.Errorf("an error occurred while creating resource %s of type %s: %s",
 			tep.Name, netv1alpha1.TunnelEndpointGroupResource, err)
 		return err
 	}
+
 	klog.Infof("resource %s of type %s created", tep.Name, netv1alpha1.TunnelEndpointGroupResource)
 
 	return nil
 }
 
 func (tec *TunnelEndpointCreator) fillTunnelEndpointSpec(tep *netv1alpha1.TunnelEndpoint, param *networkParam) {
-	tep.Spec.ClusterID = param.remoteClusterID
+	tep.Spec.ClusterID = param.remoteCluster.ClusterID
 	tep.Spec.LocalPodCIDR = param.localPodCIDR
 	tep.Spec.LocalExternalCIDR = param.localExternalCIDR
 	tep.Spec.LocalNATPodCIDR = param.localNatPodCIDR
@@ -446,13 +461,12 @@ func (tec *TunnelEndpointCreator) GetTunnelEndpoint(ctx context.Context, destina
 }
 
 func (tec *TunnelEndpointCreator) deleteTunEndpoint(ctx context.Context, netConfig *netv1alpha1.NetworkConfig) error {
-	clusterID := netConfig.Spec.ClusterID
-	tep, found, err := tec.GetTunnelEndpoint(ctx, clusterID, netConfig.GetNamespace())
+	tep, found, err := tec.GetTunnelEndpoint(ctx, netConfig.Spec.RemoteCluster.ClusterID, netConfig.GetNamespace())
 	if err != nil {
 		return err
 	}
 	if !found {
-		klog.Infof("tunnelendpoint resource for cluster %s not found", clusterID)
+		klog.Infof("tunnelendpoint resource for cluster %s not found", netConfig.Spec.RemoteCluster)
 		return nil
 	}
 	err = tec.Delete(ctx, tep)
@@ -460,6 +474,6 @@ func (tec *TunnelEndpointCreator) deleteTunEndpoint(ctx context.Context, netConf
 		return fmt.Errorf("unable to delete endpoint %s in namespace %s : %w", tep.Name, tep.Namespace, err)
 	}
 	klog.Infof("resource %s of type %s for remote cluster %s has been removed",
-		tep.Name, netv1alpha1.GroupVersion.String(), clusterID)
+		tep.Name, netv1alpha1.GroupVersion.String(), netConfig.Spec.RemoteCluster)
 	return nil
 }
